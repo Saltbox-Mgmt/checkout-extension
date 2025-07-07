@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "SFCC Checkout Debugger",
+  "version": "1.0.0",
+  "description": "Debug Salesforce Commerce Cloud checkout issues by monitoring network calls and checkout lifecycle with Salesforce log integration",
+  "permissions": ["activeTab", "storage", "debugger", "webRequest"],
+  "host_permissions": [
+    "https://*.force.com/*",
+    "https://*.salesforce.com/*",
+    "https://*.my.salesforce.com/*",
+    "https://*.experience.salesforce.com/*",
+    "https://*.site.com/*",
+    "https://*.siteforce.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.force.com/*",
+        "https://*.salesforce.com/*",
+        "https://*.my.salesforce.com/*",
+        "https://*.experience.salesforce.com/*",
+        "https://*.site.com/*",
+        "https://*.siteforce.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["sidepanel.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "SFCC Checkout Debugger"
+  },
+  "devtools_page": "devtools.html",
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected.js",
+        "sidepanel.css",
+        "network-interceptor.js",
+        "salesforce-api.js",
+        "correlation-engine.js",
+        "checkout-call-analyzer.js",
+        "test-salesforce-integration.js",
+        "test-interface.html"
+      ],
+      "matches": [
+        "https://*.force.com/*",
+        "https://*.salesforce.com/*",
+        "https://*.my.salesforce.com/*",
+        "https://*.experience.salesforce.com/*",
+        "https://*.site.com/*",
+        "https://*.siteforce.com/*"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 380px;
+      min-height: 300px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f8fafc;
+      margin: 0;
+    }
+    
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    
+    .logo {
+      width: 24px;
+      height: 24px;
+      background: #0070f3;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      font-size: 12px;
+    }
+    
+    .title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+    
+    .status-card {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    .status-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    
+    .status-title {
+      font-weight: 600;
+      color: #374151;
+      font-size: 14px;
+    }
+    
+    .status-badge {
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+    
+    .status-active {
+      background: #dcfce7;
+      color: #166534;
+    }
+    
+    .status-inactive {
+      background: #fef2f2;
+      color: #991b1b;
+    }
+    
+    .status-warning {
+      background: #fef3c7;
+      color: #92400e;
+    }
+    
+    .requirements-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    
+    .requirement {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      background: #f8fafc;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    
+    .requirement-icon {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    
+    .requirement-complete {
+      background: #22c55e;
+    }
+    
+    .requirement-incomplete {
+      background: #ef4444;
+    }
+    
+    .requirement-optional {
+      background: #f59e0b;
+    }
+    
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    
+    .btn-primary {
+      background: #0070f3;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background: #0051cc;
+    }
+    
+    .btn-secondary {
+      background: white;
+      color: #374151;
+      border: 1px solid #d1d5db;
+    }
+    
+    .btn-secondary:hover {
+      background: #f9fafb;
+    }
+    
+    .btn-success {
+      background: #22c55e;
+      color: white;
+    }
+    
+    .btn-success:hover {
+      background: #16a34a;
+    }
+    
+    .btn-danger {
+      background: #ef4444;
+      color: white;
+    }
+    
+    .btn-danger:hover {
+      background: #dc2626;
+    }
+    
+    .network-summary {
+      font-size: 12px;
+      color: #6b7280;
+      margin-top: 8px;
+    }
+    
+    .salesforce-section {
+      margin-top: 16px;
+    }
+    
+    .connection-form {
+      display: none;
+      margin-top: 12px;
+    }
+    
+    .connection-form.show {
+      display: block;
+    }
+    
+    .form-group {
+      margin-bottom: 12px;
+    }
+    
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: #374151;
+      margin-bottom: 4px;
+    }
+    
+    .form-input {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 12px;
+      box-sizing: border-box;
+    }
+    
+    .form-input:focus {
+      outline: none;
+      border-color: #0070f3;
+      box-shadow: 0 0 0 2px rgba(0, 112, 243, 0.1);
+    }
+    
+    .connection-info {
+      font-size: 11px;
+      color: #6b7280;
+      margin-top: 12px;
+      padding: 12px;
+      background: #f0f9ff;
+      border-radius: 6px;
+      border: 1px solid #bae6fd;
+    }
+    
+    .connection-info strong {
+      color: #374151;
+    }
+    
+    .help-text {
+      font-size: 10px;
+      color: #6b7280;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+    
+    .correlation-summary {
+      margin-top: 8px;
+      font-size: 11px;
+      color: #6b7280;
+    }
+    
+    .correlation-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 2px 0;
+    }
+    
+    .instructions {
+      margin-top: 12px;
+      padding: 12px;
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+      border-radius: 6px;
+      font-size: 11px;
+      display: none;
+    }
+    
+    .instructions.show {
+      display: block;
+    }
+    
+    .instructions-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #1e40af;
+    }
+    
+    .instructions ol {
+      margin: 0;
+      padding-left: 16px;
+    }
+    
+    .instructions li {
+      margin-bottom: 4px;
+      line-height: 1.3;
+    }
+    
+    .temp-status {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .account-selector {
+      margin-bottom: 12px;
+    }
+
+    .account-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .account-management {
+      margin-top: 12px;
+    }
+
+    .account-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+
+    .account-item.active {
+      background: #dbeafe;
+      border-color: #60a5fa;
+    }
+
+    .account-info {
+      flex: 1;
+    }
+
+    .account-name {
+      font-weight: 600;
+      color: #374151;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .account-url {
+      font-size: 11px;
+      color: #6b7280;
+      font-family: monospace;
+    }
+
+    .account-actions-small {
+      display: flex;
+      gap: 4px;
+    }
+
+    .btn-small {
+      padding: 4px 8px;
+      font-size: 10px;
+      border-radius: 4px;
+    }
+
+    .btn-edit {
+      background: #f59e0b;
+      color: white;
+      border: 1px solid #f59e0b;
+    }
+
+    .btn-delete {
+      background: #ef4444;
+      color: white;
+      border: 1px solid #ef4444;
+    }
+
+    .btn-select {
+      background: #22c55e;
+      color: white;
+      border: 1px solid #22c55e;
+    }
+
+    .instance-type-badge {
+      padding: 2px 6px;
+      border-radius: 12px;
+      font-size: 9px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+
+    .instance-production {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .instance-sandbox {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .form-radio-group {
+      display: flex;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .form-radio-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .form-radio-item input[type="radio"] {
+      margin: 0;
+    }
+
+    .form-radio-item label {
+      font-size: 12px;
+      cursor: pointer;
+      margin: 0;
+    }
+
+    .url-example {
+      font-size: 10px;
+      color: #6b7280;
+      font-family: monospace;
+      margin-top: 2px;
+      padding: 4px 8px;
+      background: #f8fafc;
+      border-radius: 4px;
+      border: 1px solid #e5e7eb;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">SF</div>
+    <div class="title">SFCC Debugger</div>
+  </div>
+  
+  <div class="status-card">
+  <div class="status-header">
+    <div class="status-title">Salesforce Accounts</div>
+    <div id="salesforce-status" class="status-badge status-inactive">Disconnected</div>
+  </div>
+  
+  <!-- Account Selector -->
+  <div id="account-selector" class="account-selector" style="display: none;">
+    <div class="form-group">
+      <label class="form-label">Active Account</label>
+      <select id="account-select" class="form-input">
+        <option value="">Select an account...</option>
+      </select>
+    </div>
+    <div class="account-actions">
+      <button class="btn btn-secondary" id="add-account-btn">Add Account</button>
+      <button class="btn btn-secondary" id="manage-accounts-btn">Manage</button>
+    </div>
+  </div>
+
+  <!-- Current Account Info -->
+  <div id="connection-info" class="connection-info" style="display: none;">
+    <div><strong>Account:</strong> <span id="account-name">-</span></div>
+    <div><strong>Instance:</strong> <span id="connected-instance">-</span></div>
+    <div><strong>Type:</strong> <span id="instance-type">-</span></div>
+    <div><strong>Connected:</strong> <span id="connected-time">-</span></div>
+    <div style="margin-top: 8px;">
+      <strong>Log Correlations:</strong> <span id="correlation-count">0</span> |
+      <strong>Last Sync:</strong> <span id="last-sync">Never</span>
+    </div>
+  </div>
+  
+  <!-- Add/Edit Account Form -->
+  <div id="account-form" class="connection-form">
+    <div class="form-group">
+      <label class="form-label" for="account-name-input">Account Name</label>
+      <input type="text" id="account-name-input" class="form-input" placeholder="Production, Sandbox, Dev, etc.">
+      <div class="help-text">Give this account a memorable name</div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Instance Type</label>
+      <div class="form-radio-group">
+        <div class="form-radio-item">
+          <input type="radio" id="instance-production" name="instance-type" value="production" checked>
+          <label for="instance-production">Production</label>
+        </div>
+        <div class="form-radio-item">
+          <input type="radio" id="instance-sandbox" name="instance-type" value="sandbox">
+          <label for="instance-sandbox">Sandbox</label>
+        </div>
+      </div>
+      <div class="help-text">Select whether this is a production org or sandbox</div>
+    </div>
+    
+    <div class="form-group">
+      <label class="form-label" for="instance-url">Salesforce Instance URL</label>
+      <input type="url" id="instance-url" class="form-input" placeholder="https://yourorg.my.salesforce.com">
+      <div id="url-example" class="url-example">
+        Production: https://yourorg.my.salesforce.com<br>
+        Sandbox: https://yourorg--sandboxname.sandbox.my.salesforce.com
+      </div>
+      <div class="help-text">Your Salesforce org's My Domain URL</div>
+    </div>
+    
+    <div class="form-group">
+      <label class="form-label" for="session-id">Session ID</label>
+      <input type="password" id="session-id" class="form-input" placeholder="Paste session ID from browser cookies">
+      <div class="help-text">
+        Get from DevTools → Application → Cookies → Find 'sid' cookie
+      </div>
+    </div>
+  </div>
+
+  <!-- Account Management -->
+  <div id="account-management" class="account-management" style="display: none;">
+    <div class="account-list" id="account-list">
+      <!-- Account items will be populated by JavaScript -->
+    </div>
+  </div>
+
+  <div id="instructions" class="instructions">
+    <div class="instructions-title">📋 How to Get Session ID:</div>
+    <ol>
+      <li>Open your Salesforce org in a new tab</li>
+      <li>Press F12 to open Developer Tools</li>
+      <li>Go to Application tab → Cookies</li>
+      <li>Find your Salesforce domain</li>
+      <li>Copy the 'sid' cookie value</li>
+      <li>Paste it in the Session ID field above</li>
+    </ol>
+    
+    <div style="margin-top: 12px; font-weight: 600; color: #dc2626;">Troubleshooting:</div>
+    <ul style="margin: 4px 0 0 16px; padding: 0;">
+      <li>Make sure you're logged into Salesforce</li>
+      <li>For production: Use My Domain URL (not lightning.force.com)</li>
+      <li>For sandbox: Include --sandboxname in the URL</li>
+      <li>Session ID should be 100+ characters long</li>
+    </ul>
+  </div>
+  
+  <div class="actions">
+    <button class="btn btn-primary" id="save-account-btn" style="display: none;">Save Account</button>
+    <button class="btn btn-secondary" id="cancel-btn" style="display: none;">Cancel</button>
+    <button class="btn btn-secondary" id="setup-btn">Setup Connection</button>
+    <button class="btn btn-secondary" id="instructions-btn">Show Instructions</button>
+    <button class="btn btn-success" id="test-btn" style="display: none;">Test Connection</button>
+    <button class="btn btn-primary" id="sync-btn" style="display: none;">Sync Logs</button>
+    <button class="btn btn-danger" id="disconnect-btn" style="display: none;">Disconnect</button>
+  </div>
+</div>
+
+  <script src="salesforce-api.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
