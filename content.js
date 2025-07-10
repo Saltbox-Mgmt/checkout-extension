@@ -1,186 +1,3 @@
-// Salesforce API integration for log retrieval - embedded in content script
-class SalesforceAPI {
-  constructor() {
-    this.baseUrl = null
-    this.sessionId = null
-    this.isConnected = false
-    this.orgId = null
-    this.chrome = window.chrome || window.chrome
-  }
-
-  async connect(instanceUrl, sessionId) {
-    try {
-      this.baseUrl = instanceUrl.endsWith("/") ? instanceUrl.slice(0, -1) : instanceUrl
-      this.sessionId = sessionId
-
-      const versionUrl = `${this.baseUrl}/services/data/`
-      const versionResponse = await fetch(versionUrl, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.sessionId}`,
-          Accept: "application/json",
-        },
-        mode: "cors",
-        credentials: "omit",
-      })
-
-      if (!versionResponse.ok) {
-        throw new Error(`Connection failed: ${versionResponse.status}`)
-      }
-
-      this.isConnected = true
-      return { success: true }
-    } catch (error) {
-      this.isConnected = false
-      return { success: false, error: error.message }
-    }
-  }
-
-  async makeRequest(endpoint, options = {}) {
-    if (!this.isConnected || !this.sessionId) {
-      throw new Error("Not connected to Salesforce")
-    }
-
-    const url = `${this.baseUrl}${endpoint}`
-    const requestOptions = {
-      method: options.method || "GET",
-      headers: {
-        Authorization: `Bearer ${this.sessionId}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...options.headers,
-      },
-      mode: "cors",
-      credentials: "omit",
-    }
-
-    if (options.body) {
-      requestOptions.body = JSON.stringify(options.body)
-    }
-
-    const response = await fetch(url, requestOptions)
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        this.isConnected = false
-        throw new Error("Session expired")
-      }
-      throw new Error(`API request failed: ${response.status}`)
-    }
-
-    return await response.json()
-  }
-
-  async getDebugLogs(options = {}) {
-    const { startTime = new Date(Date.now() - 60 * 60 * 1000), endTime = new Date(), maxRecords = 50 } = options
-
-    const startTimeStr = startTime.toISOString()
-    const endTimeStr = endTime.toISOString()
-
-    const soql = `
-      SELECT Id, Application, DurationMilliseconds, Location, LogLength, 
-             LogUser.Name, Operation, Request, StartTime, Status
-      FROM ApexLog 
-      WHERE StartTime >= ${startTimeStr} 
-      AND StartTime <= ${endTimeStr}
-      AND Operation = 'UniversalPerfLogger'
-      ORDER BY StartTime DESC
-      LIMIT ${maxRecords}
-    `
-
-    const result = await this.makeRequest(`/services/data/v58.0/query?q=${encodeURIComponent(soql)}`)
-
-    const logsToProcess = result.records.slice(0, Math.min(20, result.records.length))
-    const logsWithContent = await Promise.all(
-      logsToProcess.map(async (log) => {
-        try {
-          const logBody = await this.getLogBody(log.Id)
-          const parsed = this.parseCommerceLogContent(logBody)
-          return { ...log, body: logBody, parsed: parsed }
-        } catch (error) {
-          return { ...log, body: null, parsed: null, error: error.message }
-        }
-      }),
-    )
-
-    return { totalSize: result.totalSize, logs: logsWithContent }
-  }
-
-  async getLogBody(logId) {
-    const response = await fetch(`${this.baseUrl}/services/data/v58.0/sobjects/ApexLog/${logId}/Body`, {
-      headers: {
-        Authorization: `Bearer ${this.sessionId}`,
-        Accept: "text/plain",
-      },
-      mode: "cors",
-      credentials: "omit",
-    })
-
-    if (!response.ok) {
-      throw new Error(`Failed to get log body: ${response.status}`)
-    }
-
-    return await response.text()
-  }
-
-  parseCommerceLogContent(logBody) {
-    if (!logBody) return null
-
-    const lines = logBody.split("\n")
-    const parsed = {
-      errors: [],
-      warnings: [],
-      checkoutEvents: [],
-      apiCalls: [],
-      paymentEvents: [],
-      cartEvents: [],
-      webserviceCalls: [],
-      apexClass: null,
-      userInfo: null,
-      performance: { totalTime: 0, cpuTime: 0, heapSize: 0 },
-    }
-
-    lines.forEach((line) => {
-      if (line.includes("[EXTERNAL]|apex://")) {
-        const apexMatch = line.match(/apex:\/\/([^/]+)\//)
-        if (apexMatch) parsed.apexClass = apexMatch[1]
-      }
-
-      if (line.includes("|USER_INFO|")) {
-        const userMatch = line.match(/\|([^|]+@[^|]+)\|/)
-        if (userMatch) parsed.userInfo = userMatch[1]
-      }
-
-      if (line.includes("|FATAL_ERROR|") || line.includes("|ERROR|") || line.includes("|EXCEPTION_THROWN|")) {
-        parsed.errors.push({ timestamp: this.extractTimestamp(line), message: line, type: "error" })
-      }
-
-      if (line.includes("checkout") || line.includes("Checkout")) {
-        parsed.checkoutEvents.push({ timestamp: this.extractTimestamp(line), event: line, type: "checkout" })
-      }
-
-      if (line.includes("payment") || line.includes("Payment")) {
-        parsed.paymentEvents.push({ timestamp: this.extractTimestamp(line), event: line, type: "payment" })
-      }
-
-      if (line.includes("cart") || line.includes("Cart")) {
-        parsed.cartEvents.push({ timestamp: this.extractTimestamp(line), event: line, type: "cart" })
-      }
-
-      if (line.includes("|CALLOUT_REQUEST|") || line.includes("|CALLOUT_RESPONSE|")) {
-        parsed.webserviceCalls.push({ timestamp: this.extractTimestamp(line), callout: line, type: "callout" })
-      }
-    })
-
-    return parsed
-  }
-
-  extractTimestamp(line) {
-    const match = line.match(/(\d{2}:\d{2}:\d{2}\.\d{3})/)
-    return match ? match[1] : null
-  }
-}
-
 // Content script to monitor network calls and inject monitoring code
 class SFCCMonitor {
   constructor() {
@@ -196,6 +13,7 @@ class SFCCMonitor {
     this.sessionStart = Date.now()
     this.contextValid = true
     this.chrome = window.chrome
+    this.currentCheckoutId = null // Track current checkout ID
     this.requirements = [
       { key: "shippingAddress", label: "Shipping Address", required: true },
       { key: "deliveryMethod", label: "Delivery Method", required: true },
@@ -206,6 +24,18 @@ class SFCCMonitor {
     ]
     this.correlationEngine = null
     this.analyzer = null
+    this.salesforceLogger = null
+    this.sessionManager = null
+    this.currentSession = null
+    this.componentsLoaded = {
+      analyzer: false,
+      correlationEngine: false,
+      salesforceLogger: false,
+      sessionManager: false,
+    }
+    this.sessionsLoaded = false // Add flag to prevent infinite loading
+    this.isLoadingSessions = false // Add flag to prevent concurrent loading
+    this.autoSaveInterval = null // Add auto-save interval tracker
     this.init()
   }
 
@@ -245,17 +75,16 @@ class SFCCMonitor {
     }
   }
 
-  init() {
+  async init() {
     // Wait for DOM to be ready
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () => this.initializeAfterDOM())
-    } else {
-      this.initializeAfterDOM()
+      await new Promise((resolve) => {
+        document.addEventListener("DOMContentLoaded", resolve)
+      })
     }
 
-    // Load analyzer and correlation engine
-    this.loadAnalyzer()
-    this.loadCorrelationEngine()
+    // Initialize components using event-based loading
+    await this.initializeComponents()
 
     // Listen for messages from popup and devtools with error handling
     if (this.isContextValid()) {
@@ -281,60 +110,238 @@ class SFCCMonitor {
 
     // Monitor URL changes for single-page app navigation
     this.setupUrlMonitoring()
+
+    // Initialize after DOM is ready
+    this.initializeAfterDOM()
   }
 
-  loadAnalyzer() {
-    if (!this.isContextValid()) return
+  async initializeComponents() {
+    console.log("🔄 Initializing components with event-based loading...")
 
-    try {
-      const script = document.createElement("script")
-      script.src = window.chrome.runtime.getURL("checkout-call-analyzer.js")
-      script.onload = () => {
-        console.log("✅ Checkout call analyzer loaded")
-        if (window.CheckoutCallAnalyzer) {
-          this.analyzer = new window.CheckoutCallAnalyzer()
-          console.log("✅ Checkout call analyzer initialized")
-        } else {
-          console.error("❌ CheckoutCallAnalyzer not found on window object")
-        }
-        script.remove()
+    // Set up event listeners for component ready events
+    const componentPromises = [
+      this.waitForComponentEvent("CheckoutCallAnalyzerReady", "analyzer"),
+      this.waitForComponentEvent("CorrelationEngineReady", "correlationEngine"),
+      this.waitForComponentEvent("SalesforceLoggerReady", "salesforceLogger"),
+      this.waitForComponentEvent("SessionManagerReady", "sessionManager"),
+    ]
+
+    // Load all scripts
+    this.loadScript("checkout-call-analyzer.js")
+    this.loadScript("correlation-engine.js")
+    this.loadScript("salesforce-logger.js")
+    this.loadScript("session-manager.js")
+
+    // Wait for all components with timeout
+    const results = await Promise.allSettled(
+      componentPromises.map((promise) =>
+        Promise.race([
+          promise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Component load timeout")), 10000)),
+        ]),
+      ),
+    )
+
+    // Process results
+    results.forEach((result, index) => {
+      const componentNames = ["analyzer", "correlationEngine", "salesforceLogger", "sessionManager"]
+      const componentName = componentNames[index]
+
+      if (result.status === "fulfilled") {
+        this.componentsLoaded[componentName] = true
+        console.log(`✅ ${componentName} loaded successfully`)
+      } else {
+        console.warn(`⚠️ ${componentName} failed to load:`, result.reason?.message)
+        this.componentsLoaded[componentName] = false
       }
-      script.onerror = (error) => {
-        console.error("❌ Failed to load checkout call analyzer:", error)
+    })
+
+    console.log("📊 Component loading summary:", this.componentsLoaded)
+
+    // Additional check for SessionManager availability
+    this.checkSessionManagerAvailability()
+
+    // Final fallback check after a delay
+    setTimeout(() => {
+      console.log("🔍 Final component check...")
+
+      // Check SessionManager one more time
+      if (!this.sessionManager && window.SessionManager) {
+        console.log("🔧 Final SessionManager assignment")
+        this.sessionManager = window.SessionManager
+        this.componentsLoaded.sessionManager = true
+        this.updatePanelContent()
       }
 
-      const head = document.head || document.getElementsByTagName("head")[0] || document.documentElement
-      head.appendChild(script)
-    } catch (error) {
-      console.error("Failed to inject checkout call analyzer:", error)
+      console.log("📊 Final component status:", {
+        analyzer: !!this.analyzer,
+        correlationEngine: !!this.correlationEngine,
+        salesforceLogger: !!this.salesforceLogger,
+        sessionManager: !!this.sessionManager,
+        windowSessionManager: !!window.SessionManager,
+      })
+    }, 3000)
+
+    // Force update panel content after components load
+    setTimeout(() => {
+      this.updatePanelContent()
+    }, 1000)
+  }
+
+  checkSessionManagerAvailability() {
+    console.log("🔍 Checking SessionManager availability...")
+
+    // Check if SessionManager is available even if event didn't fire
+    if (window.SessionManager && typeof window.SessionManager === "object") {
+      console.log("🔍 SessionManager found directly on window object")
+      this.sessionManager = window.SessionManager
+      this.componentsLoaded.sessionManager = true
+      console.log("✅ SessionManager assigned directly:", !!this.sessionManager)
+      console.log("🔧 SessionManager methods available:", Object.keys(this.sessionManager))
+
+      // Verify required methods exist
+      const requiredMethods = [
+        "createSession",
+        "createNewSession",
+        "loadSessions",
+        "saveSession",
+        "loadSession",
+        "deleteSession",
+      ]
+      const missingMethods = requiredMethods.filter((method) => typeof this.sessionManager[method] !== "function")
+
+      if (missingMethods.length > 0) {
+        console.warn("⚠️ SessionManager missing methods:", missingMethods)
+        return false
+      }
+
+      // Load existing sessions
+      this.loadSessionsForDisplay()
+
+      return true
+    } else {
+      console.log("❌ SessionManager not found on window object")
+      console.log("🔍 window.SessionManager type:", typeof window.SessionManager)
+      console.log("🔍 window.SessionManager value:", window.SessionManager)
+
+      // Try to manually load and execute the SessionManager script
+      console.log("🔄 Attempting to manually load SessionManager...")
+      this.forceLoadSessionManager()
+
+      return false
     }
   }
 
-  loadCorrelationEngine() {
+  forceLoadSessionManager() {
+    console.log("🔧 Force loading SessionManager...")
+
+    // Try to load the script again
+    if (this.isContextValid()) {
+      try {
+        const script = document.createElement("script")
+        script.src = window.chrome.runtime.getURL("session-manager.js")
+
+        script.onload = () => {
+          console.log("✅ SessionManager script force-loaded")
+
+          // Check again after a short delay
+          setTimeout(() => {
+            if (window.SessionManager && typeof window.SessionManager === "object") {
+              console.log("🎉 SessionManager now available after force load!")
+              this.sessionManager = window.SessionManager
+              this.componentsLoaded.sessionManager = true
+              this.updatePanelContent()
+            } else {
+              console.log("❌ SessionManager still not available after force load")
+            }
+          }, 500)
+
+          script.remove()
+        }
+
+        script.onerror = (error) => {
+          console.error("❌ Failed to force load SessionManager:", error)
+          script.remove()
+        }
+
+        const head = document.head || document.getElementsByTagName("head")[0] || document.documentElement
+        head.appendChild(script)
+      } catch (error) {
+        console.error("Failed to inject SessionManager script:", error)
+      }
+    }
+  }
+
+  waitForComponentEvent(eventName, componentName) {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`${componentName} event timeout`))
+      }, 8000)
+
+      const handler = (event) => {
+        console.log(`🎉 Received ${eventName} event`)
+        clearTimeout(timeout)
+        window.removeEventListener(eventName, handler)
+
+        // Initialize the component
+        try {
+          switch (componentName) {
+            case "analyzer":
+              this.analyzer = new window.CheckoutCallAnalyzer()
+              break
+            case "correlationEngine":
+              this.correlationEngine = new window.CorrelationEngine()
+              break
+            case "salesforceLogger":
+              this.salesforceLogger = new window.SalesforceLogger()
+              break
+            case "sessionManager":
+              // For the object-based SessionManager, just reference it directly
+              this.sessionManager = window.SessionManager
+              console.log("✅ SessionManager object assigned via event:", !!this.sessionManager)
+              break
+          }
+          resolve(true)
+        } catch (error) {
+          console.error(`Failed to initialize ${componentName}:`, error)
+          reject(error)
+        }
+      }
+
+      window.addEventListener(eventName, handler)
+    })
+  }
+
+  loadScript(filename) {
     if (!this.isContextValid()) return
 
     try {
       const script = document.createElement("script")
-      script.src = window.chrome.runtime.getURL("correlation-engine.js")
+      script.src = window.chrome.runtime.getURL(filename)
+
       script.onload = () => {
-        console.log("✅ Correlation engine loaded")
-        // Initialize the correlation engine after the script loads
-        if (window.CorrelationEngine) {
-          this.correlationEngine = new window.CorrelationEngine()
-          console.log("✅ Correlation engine initialized")
-        } else {
-          console.error("❌ CorrelationEngine not found on window object")
+        console.log(`✅ ${filename} script loaded`)
+
+        // Special handling for session-manager.js
+        if (filename === "session-manager.js") {
+          // Give it a moment to execute and set up window.SessionManager
+          setTimeout(() => {
+            this.checkSessionManagerAvailability()
+          }, 100)
         }
+
         script.remove()
       }
+
       script.onerror = (error) => {
-        console.error("❌ Failed to load correlation engine:", error)
+        console.error(`❌ Failed to load ${filename}:`, error)
+        script.remove()
       }
 
       const head = document.head || document.getElementsByTagName("head")[0] || document.documentElement
       head.appendChild(script)
     } catch (error) {
-      console.error("Failed to inject correlation engine:", error)
+      console.error(`Failed to inject ${filename}:`, error)
     }
   }
 
@@ -350,6 +357,17 @@ class SFCCMonitor {
         this.salesforceLogs = message.logs || []
         this.updatePanelContent()
         sendResponse({ success: true })
+      } else if (message.action === "getComponentStatus") {
+        sendResponse({
+          success: true,
+          components: this.componentsLoaded,
+          analyzer: !!this.analyzer,
+          correlationEngine: !!this.correlationEngine,
+          salesforceLogger: !!this.salesforceLogger,
+          sessionManager: !!this.sessionManager,
+          sessionManagerType: typeof this.sessionManager,
+          windowSessionManager: typeof window.SessionManager,
+        })
       }
     } catch (error) {
       console.error("Error handling message:", error)
@@ -643,6 +661,23 @@ vertical-align: baseline !important;
         </div>
       </div>
 
+      <!-- Current Session Section -->
+      <div id="sfcc-current-session-section" class="sfcc-status-section" style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; background: #f0fdf4; display: none;">
+        <div class="sfcc-status-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <div class="sfcc-status-title" style="font-weight: 600; color: #166534; font-size: 12px;">Current Session</div>
+          <div style="display: flex; gap: 4px;">
+            <button id="sfcc-save-session-btn" style="padding: 2px 6px; border: 1px solid #22c55e; border-radius: 3px; background: #22c55e; color: white; font-size: 9px; cursor: pointer;">Save</button>
+            <button id="sfcc-end-session-btn" style="padding: 2px 6px; border: 1px solid #ef4444; border-radius: 3px; background: #ef4444; color: white; font-size: 9px; cursor: pointer;">End</button>
+          </div>
+        </div>
+        <div style="font-size: 11px; color: #166534;">
+          <div><strong>Name:</strong> <span id="sfcc-current-session-name">-</span></div>
+          <div><strong>Checkout ID:</strong> <span id="sfcc-current-session-checkout-id">-</span></div>
+          <div><strong>Duration:</strong> <span id="sfcc-current-session-duration">-</span></div>
+          <div><strong>Calls:</strong> <span id="sfcc-current-session-calls">0</span></div>
+        </div>
+      </div>
+
       <div class="sfcc-status-section" style="padding: 16px; border-bottom: 1px solid #e2e8f0; background: #f8fafc;">
         <div class="sfcc-status-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
           <div class="sfcc-status-title" style="font-weight: 600; color: #374151; font-size: 14px;">Monitoring Status</div>
@@ -668,6 +703,7 @@ vertical-align: baseline !important;
       
       <div class="sfcc-tabs" style="display: flex; background: white; border-bottom: 1px solid #e2e8f0;">
         <button class="sfcc-tab active" data-tab="network" style="flex: 1; padding: 12px 8px; border: none; background: #f8fafc; cursor: pointer; font-size: 12px; color: #60a5fa; border-bottom: 2px solid #60a5fa; transition: all 0.2s;">Network</button>
+        <button class="sfcc-tab" data-tab="sessions" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">Sessions</button>
         <button class="sfcc-tab" data-tab="correlations" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">Correlations</button>
         <button class="sfcc-tab" data-tab="logs" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">SF Logs</button>
         <button class="sfcc-tab" data-tab="errors" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">Errors</button>
@@ -681,6 +717,7 @@ vertical-align: baseline !important;
     <div class="sfcc-actions" style="padding: 12px 16px; border-top: 1px solid #e2e8f0; background: #f8fafc; display: flex; gap: 8px;">
       <button class="sfcc-btn" id="sfcc-clear-btn" style="flex: 1; padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 4px; background: white; color: #374151; font-size: 11px; cursor: pointer; transition: all 0.2s;">Clear</button>
       <button class="sfcc-btn sfcc-btn-primary" id="sfcc-export-btn" style="flex: 1; padding: 6px 12px; border: 1px solid #60a5fa; border-radius: 4px; background: #60a5fa; color: white; font-size: 11px; cursor: pointer; transition: all 0.2s;">Export</button>
+      <button class="sfcc-btn sfcc-btn-danger" id="sfcc-clear-sessions-btn" style="flex: 1; padding: 6px 12px; border: 1px solid #ef4444; border-radius: 4px; background: #ef4444; color: white; font-size: 11px; cursor: pointer; transition: all 0.2s;">Clear Sessions</button>
     </div>
   `
   }
@@ -742,6 +779,33 @@ vertical-align: baseline !important;
       }
     } catch (error) {
       console.warn("Error updating active account display:", error)
+    }
+  }
+
+  updateCurrentSessionDisplay() {
+    const currentSessionSection = document.getElementById("sfcc-current-session-section")
+    const sessionNameEl = document.getElementById("sfcc-current-session-name")
+    const sessionCheckoutIdEl = document.getElementById("sfcc-current-session-checkout-id")
+    const sessionDurationEl = document.getElementById("sfcc-current-session-duration")
+    const sessionCallsEl = document.getElementById("sfcc-current-session-calls")
+
+    if (!currentSessionSection) return
+
+    if (this.currentSession && this.currentSession.id) {
+      currentSessionSection.style.display = "block"
+
+      this.safeSetTextContent(sessionNameEl, this.currentSession.name || "Unnamed Session")
+      this.safeSetTextContent(
+        sessionCheckoutIdEl,
+        this.currentSession.checkoutId || this.currentCheckoutId || "Not detected",
+      )
+
+      const duration = Math.floor((Date.now() - (this.currentSession.startTime || Date.now())) / 1000)
+      this.safeSetTextContent(sessionDurationEl, `${duration}s`)
+
+      this.safeSetTextContent(sessionCallsEl, this.networkCalls.length.toString())
+    } else {
+      currentSessionSection.style.display = "none"
     }
   }
 
@@ -815,11 +879,34 @@ vertical-align: baseline !important;
         })
       }
 
+      // Clear Sessions button
+      const clearSessionsBtn = document.getElementById("sfcc-clear-sessions-btn")
+      if (clearSessionsBtn) {
+        clearSessionsBtn.addEventListener("click", () => {
+          this.clearAllSessions()
+        })
+      }
+
       // Sync button in panel header
       const syncBtn = document.getElementById("sfcc-sync-btn")
       if (syncBtn) {
         syncBtn.addEventListener("click", () => {
           this.syncSalesforceData()
+        })
+      }
+
+      // Session management buttons
+      const saveSessionBtn = document.getElementById("sfcc-save-session-btn")
+      if (saveSessionBtn) {
+        saveSessionBtn.addEventListener("click", () => {
+          this.saveCurrentSession()
+        })
+      }
+
+      const endSessionBtn = document.getElementById("sfcc-end-session-btn")
+      if (endSessionBtn) {
+        endSessionBtn.addEventListener("click", () => {
+          this.endCurrentSession()
         })
       }
 
@@ -855,6 +942,7 @@ vertical-align: baseline !important;
   updatePanelContent() {
     try {
       this.updateActiveAccountDisplay()
+      this.updateCurrentSessionDisplay()
       this.renderRequirements()
       this.renderTabContent()
       this.updateStatus()
@@ -985,28 +1073,84 @@ vertical-align: baseline !important;
 
   getCallCountForRequirement(requirementKey) {
     return this.networkCalls.filter((call) => {
-      const stage = this.mapUrlToRequirement(call.url)
+      const stage = this.mapUrlToRequirement(call.url, call.requestBody)
       return stage === requirementKey
     }).length
   }
 
-  mapUrlToRequirement(url) {
+  // Enhanced URL to requirement mapping that considers request body
+  mapUrlToRequirement(url, requestBody = null) {
+    if (!url) return null
+
     const urlLower = url.toLowerCase()
 
-    // More comprehensive URL pattern matching
+    // Reduce logging to prevent infinite loops - only log when debugging is needed
+    if (this.activeTab === "sessions" && this.isLoadingSessions) {
+      // Skip logging during session loading to prevent loops
+      return null
+    }
+
+    // Handle /active calls by analyzing the request body
+    if (urlLower.includes("/active")) {
+      if (requestBody) {
+        // Parse the request body if it's a string
+        let parsedBody = requestBody
+        if (typeof requestBody === "string") {
+          try {
+            parsedBody = JSON.parse(requestBody)
+          } catch (e) {
+            // Silent fail for parsing errors
+          }
+        }
+
+        // Check for delivery method updates
+        if (parsedBody && parsedBody.deliveryMethodId) {
+          return "deliveryMethod"
+        }
+
+        // Check for address updates
+        if (parsedBody && parsedBody.deliveryAddress) {
+          return "shippingAddress"
+        }
+
+        // Check for billing address
+        if (parsedBody && parsedBody.billingAddress) {
+          return "billingAddress"
+        }
+
+        // Check for payment updates
+        if (parsedBody && (parsedBody.paymentMethodId || parsedBody.paymentDetails)) {
+          return "payment"
+        }
+
+        // Check for other address-related fields
+        if (
+          parsedBody &&
+          (parsedBody.desiredDeliveryDate || parsedBody.shippingInstructions || parsedBody.contactInfo)
+        ) {
+          return "shippingAddress"
+        }
+      }
+
+      return null
+    }
+
+    // Existing URL-based logic for other endpoints
     if (
       urlLower.includes("/addresses") &&
       (urlLower.includes("addresstype=shipping") || urlLower.includes("shipping"))
     ) {
       return "shippingAddress"
     }
+
     if (urlLower.includes("/addresses") && (urlLower.includes("addresstype=billing") || urlLower.includes("billing"))) {
       return "billingAddress"
     }
+
     if (urlLower.includes("/shipping-address") || urlLower.includes("/delivery-address")) {
       return "shippingAddress"
     }
-    // Update this section to include the actual Commerce Cloud delivery patterns
+
     if (
       urlLower.includes("/delivery-methods") ||
       urlLower.includes("/shipping-methods") ||
@@ -1015,20 +1159,24 @@ vertical-align: baseline !important;
     ) {
       return "deliveryMethod"
     }
+
     if (
       urlLower.includes("/inventory") ||
       urlLower.includes("/cart-items") ||
       urlLower.includes("/inventory-reservations") ||
-      urlLower.includes("/products/") // Product availability checks
+      urlLower.includes("/products/")
     ) {
       return "inventory"
     }
+
     if (urlLower.includes("/taxes") || urlLower.includes("/tax")) {
       return "taxes"
     }
+
     if (urlLower.includes("/billing-address")) {
       return "billingAddress"
     }
+
     if (urlLower.includes("/payments") || urlLower.includes("/payment")) {
       return "payment"
     }
@@ -1045,8 +1193,15 @@ vertical-align: baseline !important;
       this.activeFilter = filterKey
     }
 
+    console.log("Filter toggled:", this.activeFilter)
+
+    // Re-render requirements to update visual state
     this.renderRequirements()
-    this.renderTabContent()
+
+    // Re-render current tab content if it's network tab
+    if (this.activeTab === "network") {
+      this.renderTabContent()
+    }
   }
 
   renderTabContent() {
@@ -1057,6 +1212,9 @@ vertical-align: baseline !important;
       switch (this.activeTab) {
         case "network":
           container.innerHTML = this.renderNetworkCalls()
+          break
+        case "sessions":
+          container.innerHTML = this.renderSessions()
           break
         case "correlations":
           container.innerHTML = this.renderCorrelations()
@@ -1070,199 +1228,473 @@ vertical-align: baseline !important;
       }
 
       // Add click handlers for expandable items
-      container
-        .querySelectorAll(".sfcc-network-call-header, .sfcc-log-header, .sfcc-correlation-header")
-        .forEach((header) => {
-          header.addEventListener("click", (e) => {
-            const call = e.target.closest(".sfcc-network-call, .sfcc-log, .sfcc-correlation")
-            const details = call.querySelector(
-              ".sfcc-network-call-details, .sfcc-log-details, .sfcc-correlation-details",
-            )
-            if (details) {
-              this.safeSetStyle(details, "display", details.style.display === "block" ? "none" : "block")
-            }
-          })
+      container.querySelectorAll(".sfcc-network-call-header").forEach((header) => {
+        header.addEventListener("click", (e) => {
+          const call = e.target.closest(".sfcc-network-call")
+          const details = call.querySelector(".sfcc-network-call-details")
+          if (details) {
+            const isVisible = details.style.display === "block"
+            details.style.display = isVisible ? "none" : "block"
+          }
         })
+      })
+
+      // Add click handlers for session headers
+      container.querySelectorAll(".sfcc-session-header").forEach((header) => {
+        header.addEventListener("click", (e) => {
+          // Don't toggle if clicking a button
+          if (e.target.tagName === "BUTTON") return
+
+          const session = e.target.closest(".sfcc-session")
+          const details = session.querySelector(".sfcc-session-details")
+          if (details) {
+            const isVisible = details.style.display === "block"
+            details.style.display = isVisible ? "none" : "block"
+          }
+        })
+      })
+
+      // Add click handlers for other expandable items
+      container.querySelectorAll(".sfcc-log-header, .sfcc-correlation-header").forEach((header) => {
+        header.addEventListener("click", (e) => {
+          const item = e.target.closest(".sfcc-log, .sfcc-correlation")
+          const details = item.querySelector(".sfcc-log-details, .sfcc-correlation-details")
+          if (details) {
+            const isVisible = details.style.display === "block"
+            details.style.display = isVisible ? "none" : "block"
+          }
+        })
+      })
+
+      // Add session management event listeners if on sessions tab
+      if (this.activeTab === "sessions") {
+        this.setupSessionTabEventListeners()
+      }
     } catch (error) {
       console.error("Error rendering tab content:", error)
     }
   }
 
-  renderCorrelations() {
-    if (!this.correlations || this.correlations.length === 0) {
+  renderNetworkCalls() {
+    let filteredCalls = this.networkCalls
+
+    // Apply filter if active
+    if (this.activeFilter) {
+      filteredCalls = this.networkCalls.filter((call) => {
+        const stage = this.mapUrlToRequirement(call.url, call.requestBody)
+        return stage === this.activeFilter
+      })
+    }
+
+    if (filteredCalls.length === 0) {
+      return `
+    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+      <div style="font-size: 32px; margin-bottom: 12px;">🌐</div>
+      <div>${this.activeFilter ? "No calls found for this filter" : "No network calls captured"}</div>
+      <div style="font-size: 10px; margin-top: 8px;">${this.activeFilter ? "Try selecting a different filter" : "Perform checkout actions to see network calls"}</div>
+    </div>
+  `
+    }
+
+    return filteredCalls
+      .slice(0, 20) // Limit to avoid performance issues
+      .map((call) => {
+        const stage = this.mapUrlToRequirement(call.url, call.requestBody)
+        const stageLabel = stage ? this.requirements.find((r) => r.key === stage)?.label || stage : "Other"
+
+        // Get analysis from analyzer if available
+        let analysisInfo = ""
+        if (this.analyzer && call.analysis) {
+          analysisInfo = `
+        <div style="margin-bottom: 12px;">
+          <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Analysis</div>
+          <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd;">
+            <div><strong>Category:</strong> ${call.analysis.category}</div>
+            <div><strong>Type:</strong> ${call.analysis.type}</div>
+            <div><strong>Confidence:</strong> ${(call.analysis.confidence * 100).toFixed(0)}%</div>
+            ${call.analysis.checkoutId ? `<div><strong>Checkout ID:</strong> ${call.analysis.checkoutId}</div>` : ""}
+            ${call.analysis.errors?.length > 0 ? `<div><strong>Errors:</strong> ${call.analysis.errors.join(", ")}</div>` : ""}
+          </div>
+        </div>
+      `
+        }
+
+        return `
+      <div class="sfcc-network-call" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
+        <div class="sfcc-network-call-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
+          <div style="display: flex; align-items: center; flex: 1;">
+            <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getMethodColor(call.method)};">${call.method}</span>
+            <span style="font-family: monospace; font-size: 10px; color: #374151; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${call.urlName || this.truncateUrl(call.url)}</span>
+            <span style="background: #dbeafe; color: #1d4ed8; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase; margin-left: 4px;">${stageLabel}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 10px; color: #6b7280;">${call.duration}ms</span>
+            <div style="font-size: 11px; font-weight: 600; color: ${this.getStatusColor(call.status)};">
+              ${call.status}
+            </div>
+          </div>
+        </div>
+        <div class="sfcc-network-call-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
+          ${analysisInfo}
+          
+          <div style="margin-bottom: 12px;">
+            <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request</div>
+            <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">
+              <div><strong>URL:</strong> ${call.url}</div>
+              <div><strong>Method:</strong> ${call.method}</div>
+              <div><strong>Time:</strong> ${new Date(call.timestamp).toLocaleString()}</div>
+              <div><strong>Duration:</strong> ${call.duration}ms</div>
+            </div>
+          </div>
+          
+          ${
+            call.requestHeaders && Object.keys(call.requestHeaders).length > 0
+              ? `
+            <div style="margin-bottom: 12px;">
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request Headers</div>
+              <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd; max-height: 120px; overflow: auto;">
+                ${Object.entries(call.requestHeaders)
+                  .slice(0, 10)
+                  .map(([key, value]) => `<div><strong>${key}:</strong> ${value}</div>`)
+                  .join("")}
+              </div>
+            </div>
+          `
+              : ""
+          }
+          
+          ${
+            call.requestBody
+              ? `
+            <div style="margin-bottom: 12px;">
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request Body</div>
+              <div style="font-family: monospace; font-size: 9px; background: #fef3c7; padding: 6px; border-radius: 3px; border: 1px solid #fde68a; white-space: pre-wrap; max-height: 120px; overflow: auto;">
+                ${typeof call.requestBody === "string" ? call.requestBody.substring(0, 500) : JSON.stringify(call.requestBody, null, 2).substring(0, 500)}${(typeof call.requestBody === "string" ? call.requestBody : JSON.stringify(call.requestBody)).length > 500 ? "..." : ""}
+              </div>
+            </div>
+          `
+              : ""
+          }
+          
+          ${
+            call.responseBody || call.response
+              ? `
+            <div style="margin-bottom: 12px;">
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Response Body</div>
+              <div style="font-family: monospace; font-size: 9px; background: #f0fdf4; padding: 6px; border-radius: 3px; border: 1px solid #bbf7d0; white-space: pre-wrap; max-height: 120px; overflow: auto;">
+                ${(() => {
+                  const responseData = call.responseBody || call.response
+                  const responseStr =
+                    typeof responseData === "string" ? responseData : JSON.stringify(responseData, null, 2)
+                  return responseStr
+                    ? responseStr.substring(0, 500) + (responseStr.length > 500 ? "..." : "")
+                    : "No response data"
+                })()}
+              </div>
+            </div>
+          `
+              : ""
+          }
+        </div>
+      </div>
+    `
+      })
+      .join("")
+  }
+
+  renderSessions() {
+    if (!this.sessionManager) {
+      return `
+    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+      <div style="font-size: 32px; margin-bottom: 12px;">⚠️</div>
+      <div>Session Manager not available</div>
+      <div style="font-size: 10px; margin-top: 8px;">Sessions cannot be loaded</div>
+    </div>
+  `
+    }
+
+    // Load sessions only once to prevent infinite loops
+    if (!this.sessionsLoaded && !this.isLoadingSessions) {
+      this.loadSessionsForDisplay()
+    }
+
+    // Check if sessions are loaded
+    if (this.isLoadingSessions) {
       return `
       <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
-        <div style="font-size: 32px; margin-bottom: 12px;">🔗</div>
-        <div>No correlations found</div>
-        <div style="font-size: 10px; margin-top: 8px;">
-          ${this.networkCalls.length === 0 ? "Perform checkout actions to generate network calls" : ""}
-          ${this.salesforceLogs.length === 0 ? "Click 'Sync SF' to fetch Salesforce logs" : ""}
-          ${this.networkCalls.length > 0 && this.salesforceLogs.length > 0 ? "No matching patterns found between network calls and SF logs" : ""}
-        </div>
+        <div style="font-size: 32px; margin-bottom: 12px;">⏳</div>
+        <div>Loading sessions...</div>
+      </div>
+      `
+    }
+
+    // Get sessions from SessionManager
+    let sessions = []
+    try {
+      sessions = this.sessionManager.sessions || []
+      console.log(`Found ${sessions.length} sessions to display`)
+    } catch (error) {
+      console.error("Error accessing sessions:", error)
+      return `
+      <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+        <div style="font-size: 32px; margin-bottom: 12px;">❌</div>
+        <div>Error loading sessions</div>
+        <div style="font-size: 10px; margin-top: 8px;">${error.message}</div>
       </div>
     `
     }
 
-    return this.correlations
-      .slice(0, 20) // Limit to avoid performance issues
-      .map((correlation) => {
-        const confidenceColor =
-          correlation.confidence > 0.8 ? "#22c55e" : correlation.confidence > 0.6 ? "#f59e0b" : "#ef4444"
-        const confidenceText = correlation.confidence > 0.8 ? "High" : correlation.confidence > 0.6 ? "Medium" : "Low"
+    if (sessions.length === 0) {
+      return `
+    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+      <div style="font-size: 32px; margin-bottom: 12px;">📋</div>
+      <div>No sessions found</div>
+      <div style="font-size: 10px; margin-top: 8px;">Sessions will appear here as you debug checkout flows</div>
+      <button id="sfcc-create-session-btn" style="margin-top: 12px; padding: 6px 12px; border: 1px solid #60a5fa; border-radius: 4px; background: #60a5fa; color: white; font-size: 11px; cursor: pointer;">Create New Session</button>
+    </div>
+  `
+    }
+
+    // Sort sessions by most recent first
+    const sortedSessions = [...sessions].sort((a, b) => (b.startTime || 0) - (a.startTime || 0))
+
+    return `
+    <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+      <div style="font-size: 12px; color: #6b7280;">${sessions.length} session${sessions.length !== 1 ? "s" : ""} found</div>
+      <button id="sfcc-create-session-btn" style="padding: 4px 8px; border: 1px solid #60a5fa; border-radius: 4px; background: #60a5fa; color: white; font-size: 10px; cursor: pointer;">New Session</button>
+    </div>
+    
+    ${sortedSessions
+      .map((session) => {
+        const duration = session.endTime
+          ? Math.floor((session.endTime - session.startTime) / 1000)
+          : Math.floor((Date.now() - session.startTime) / 1000)
+
+        const isActive = this.currentSession && this.currentSession.id === session.id
 
         return `
-        <div class="sfcc-correlation" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden; border-left: 3px solid ${confidenceColor};">
-          <div class="sfcc-correlation-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
-            <div style="display: flex; align-items: center; flex: 1;">
-              <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getMethodColor(correlation.networkCall.method)};">${correlation.networkCall.method}</span>
-              <span style="font-family: monospace; font-size: 10px; color: #374151; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.truncateUrl(correlation.networkCall.url)}</span>
-              <span style="background: #dbeafe; color: #1d4ed8; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase; margin-left: 4px;">${correlation.type}</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 10px; color: #6b7280;">${Math.round(correlation.timeDifference / 1000)}s apart</span>
-              <div style="font-size: 11px; font-weight: 600; color: ${confidenceColor};">
-                ${(correlation.confidence * 100).toFixed(0)}%
+      <div class="sfcc-session" style="background: ${isActive ? "#f0fdf4" : "#f9fafb"}; border: 1px solid ${isActive ? "#22c55e" : "#e5e7eb"}; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
+        <div class="sfcc-session-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
+          <div style="display: flex; align-items: center; flex: 1;">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${isActive ? "#22c55e" : session.endTime ? "#6b7280" : "#f59e0b"}; margin-right: 8px;"></div>
+            <div style="flex: 1;">
+              <div style="font-weight: 600; font-size: 11px; color: #374151; margin-bottom: 2px;">${session.name || "Unnamed Session"}</div>
+              <div style="font-size: 9px; color: #6b7280;">
+                <span>Checkout ID: ${session.checkoutId || "Not detected"}</span> • 
+                <span>${session.networkCalls?.length || 0} calls</span> • 
+                <span>${duration}s</span>
               </div>
             </div>
           </div>
-          <div class="sfcc-correlation-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
-            <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Correlation Analysis</div>
-              <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">
-                <div><strong>Confidence:</strong> ${confidenceText} (${(correlation.confidence * 100).toFixed(1)}%)</div>
-                <div><strong>Type:</strong> ${correlation.type}</div>
-                <div><strong>Score:</strong> ${correlation.score.toFixed(1)}/${correlation.maxScore}</div>
-                <div><strong>Reasoning:</strong> ${correlation.reasoning}</div>
-                <div><strong>Factors:</strong> ${correlation.factors.join(", ")}</div>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            ${
+              isActive
+                ? `<span style="background: #dcfce7; color: #166534; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase;">Active</span>`
+                : session.endTime
+                  ? `<span style="background: #f3f4f6; color: #6b7280; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase;">Completed</span>`
+                  : `<span style="background: #fef3c7; color: #92400e; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase;">Paused</span>`
+            }
+          </div>
+        </div>
+        <div class="sfcc-session-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+            <div>
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Session Info</div>
+              <div style="font-size: 10px; color: #6b7280;">
+                <div><strong>ID:</strong> ${session.id}</div>
+                <div><strong>Started:</strong> ${new Date(session.startTime).toLocaleString()}</div>
+                ${session.endTime ? `<div><strong>Ended:</strong> ${new Date(session.endTime).toLocaleString()}</div>` : ""}
+                <div><strong>Duration:</strong> ${duration}s</div>
+                <div><strong>Checkout ID:</strong> ${session.checkoutId || "Not detected"}</div>
               </div>
             </div>
-            
-            <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Network Call</div>
-              <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd;">
-                <div><strong>URL:</strong> ${correlation.networkCall.url}</div>
-                <div><strong>Status:</strong> ${correlation.networkCall.status}</div>
-                <div><strong>Time:</strong> ${new Date(correlation.networkCall.timestamp).toLocaleString()}</div>
-                ${correlation.networkCall.checkoutId ? `<div><strong>Checkout ID:</strong> ${correlation.networkCall.checkoutId}</div>` : ""}
+            <div>
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Statistics</div>
+              <div style="font-size: 10px; color: #6b7280;">
+                <div><strong>Network Calls:</strong> ${session.networkCalls?.length || 0}</div>
+                <div><strong>Errors:</strong> ${session.errors?.length || 0}</div>
+                <div><strong>SF Logs:</strong> ${session.salesforceLogs?.length || 0}</div>
+                <div><strong>Correlations:</strong> ${session.correlations?.length || 0}</div>
               </div>
             </div>
-            
-            <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Salesforce Log</div>
-              <div style="font-family: monospace; font-size: 9px; background: #fef3c7; padding: 6px; border-radius: 3px; border: 1px solid #fde68a;">
-                <div><strong>ID:</strong> ${correlation.salesforceLog.Id}</div>
-                <div><strong>Operation:</strong> ${correlation.salesforceLog.Operation}</div>
-                <div><strong>Duration:</strong> ${correlation.salesforceLog.DurationMilliseconds}ms</div>
-                <div><strong>Time:</strong> ${new Date(correlation.salesforceLog.StartTime).toLocaleString()}</div>
-                ${correlation.salesforceLog.parsed?.apexClass ? `<div><strong>Apex Class:</strong> ${correlation.salesforceLog.parsed.apexClass}</div>` : ""}
-              </div>
+          </div>
+          
+          <div style="display: flex; gap: 6px; margin-top: 12px;">
+            ${
+              !isActive
+                ? `<button class="sfcc-load-session-btn" data-session-id="${session.id}" style="padding: 4px 8px; border: 1px solid #22c55e; border-radius: 3px; background: #22c55e; color: white; font-size: 9px; cursor: pointer;">Load Session</button>`
+                : ""
+            }
+            <button class="sfcc-export-session-btn" data-session-id="${session.id}" style="padding: 4px 8px; border: 1px solid #60a5fa; border-radius: 3px; background: #60a5fa; color: white; font-size: 9px; cursor: pointer;">Export</button>
+            <button class="sfcc-delete-session-btn" data-session-id="${session.id}" style="padding: 4px 8px; border: 1px solid #ef4444; border-radius: 3px; background: #ef4444; color: white; font-size: 9px; cursor: pointer;">Delete</button>
+          </div>
+        </div>
+      </div>
+    `
+      })
+      .join("")}
+  `
+  }
+
+  async loadSessionsForDisplay() {
+    if (this.isLoadingSessions) {
+      console.log("Already loading sessions, skipping...")
+      return
+    }
+
+    this.isLoadingSessions = true
+    console.log("Loading sessions for display...")
+
+    try {
+      if (this.sessionManager && typeof this.sessionManager.loadSessions === "function") {
+        await this.sessionManager.loadSessions()
+        console.log(`Loaded ${this.sessionManager.sessions?.length || 0} sessions`)
+        this.sessionsLoaded = true
+      } else {
+        console.warn("SessionManager or loadSessions method not available")
+      }
+    } catch (error) {
+      console.error("Error loading sessions:", error)
+    } finally {
+      this.isLoadingSessions = false
+    }
+  }
+
+  setupSessionTabEventListeners() {
+    const container = document.getElementById("sfcc-tab-content")
+    if (!container) return
+
+    // Create new session button
+    const createBtn = container.querySelector("#sfcc-create-session-btn")
+    if (createBtn) {
+      createBtn.addEventListener("click", () => {
+        this.createNewSession()
+      })
+    }
+
+    // Load session buttons
+    container.querySelectorAll(".sfcc-load-session-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const sessionId = e.target.dataset.sessionId
+        this.loadSession(sessionId)
+      })
+    })
+
+    // Export session buttons
+    container.querySelectorAll(".sfcc-export-session-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const sessionId = e.target.dataset.sessionId
+        this.exportSession(sessionId)
+      })
+    })
+
+    // Delete session buttons
+    container.querySelectorAll(".sfcc-delete-session-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const sessionId = e.target.dataset.sessionId
+        if (confirm("Are you sure you want to delete this session?")) {
+          this.deleteSession(sessionId)
+        }
+      })
+    })
+  }
+
+  renderCorrelations() {
+    if (this.correlations.length === 0) {
+      return `
+    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+      <div style="font-size: 32px; margin-bottom: 12px;">🔗</div>
+      <div>No correlations found</div>
+      <div style="font-size: 10px; margin-top: 8px;">Correlations between network calls and Salesforce logs will appear here</div>
+    </div>
+  `
+    }
+
+    return this.correlations
+      .map((correlation) => {
+        return `
+      <div class="sfcc-correlation" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
+        <div class="sfcc-correlation-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
+          <div style="display: flex; align-items: center; flex: 1;">
+            <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: #8b5cf6;">CORR</span>
+            <span style="font-size: 11px; color: #374151; flex: 1;">${correlation.type}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 10px; color: #6b7280;">${new Date(correlation.timestamp).toLocaleTimeString()}</span>
+            <div style="font-size: 11px; font-weight: 600; color: #8b5cf6;">
+              ${(correlation.confidence * 100).toFixed(0)}%
             </div>
           </div>
         </div>
-      `
+        <div class="sfcc-correlation-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
+          <div style="margin-bottom: 12px;">
+            <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Correlation Details</div>
+            <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">
+              <div><strong>Type:</strong> ${correlation.type}</div>
+              <div><strong>Confidence:</strong> ${(correlation.confidence * 100).toFixed(0)}%</div>
+              <div><strong>Network Call:</strong> ${correlation.networkCall?.method} ${correlation.networkCall?.url}</div>
+              <div><strong>Salesforce Log:</strong> ${correlation.salesforceLog?.message}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `
       })
       .join("")
   }
 
   renderSalesforceLogs() {
-    if (!this.salesforceLogs || this.salesforceLogs.length === 0) {
+    if (this.salesforceLogs.length === 0) {
       return `
-      <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
-        <div style="font-size: 32px; margin-bottom: 12px;">📝</div>
-        <div>No Salesforce logs</div>
-        <div style="font-size: 10px; margin-top: 8px;">Click "Sync SF" to fetch logs from Salesforce</div>
-      </div>
-    `
+    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+      <div style="font-size: 32px; margin-bottom: 12px;">📋</div>
+      <div>No Salesforce logs found</div>
+      <div style="font-size: 10px; margin-top: 8px;">Connect to Salesforce to see logs here</div>
+    </div>
+  `
     }
 
     return this.salesforceLogs
       .slice(0, 20) // Limit to avoid performance issues
       .map((log) => {
-        const apexClass = log.parsed?.apexClass || "Unknown"
-        const userInfo = log.parsed?.userInfo || log.LogUser?.Name || "Unknown User"
-        const hasErrors = log.parsed?.errors?.length > 0
-
         return `
-        <div class="sfcc-log" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden; ${hasErrors ? "border-left: 3px solid #ef4444;" : ""}">
-          <div class="sfcc-log-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
-            <div style="display: flex; align-items: center; flex: 1;">
-              <span style="font-weight: 600; font-size: 11px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: #3b82f6;">${apexClass}</span>
-              <span style="font-family: monospace; font-size: 10px; color: #374151; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${userInfo}</span>
-              ${hasErrors ? `<span style="background: #fef2f2; color: #991b1b; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; margin-left: 4px;">ERRORS</span>` : ""}
-            </div>
-            <div style="font-size: 10px; color: #6b7280;">
-              ${log.DurationMilliseconds}ms
-            </div>
+      <div class="sfcc-log" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
+        <div class="sfcc-log-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
+          <div style="display: flex; align-items: center; flex: 1;">
+            <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getLogLevelColor(log.level)};">${log.level}</span>
+            <span style="font-size: 11px; color: #374151; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${log.message}</span>
           </div>
-          <div class="sfcc-log-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
-            <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Log Info</div>
-              <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">
-                <div><strong>ID:</strong> ${log.Id}</div>
-                <div><strong>User:</strong> ${userInfo}</div>
-                <div><strong>Apex Class:</strong> ${apexClass}</div>
-                <div><strong>Duration:</strong> ${log.DurationMilliseconds}ms</div>
-                <div><strong>Time:</strong> ${new Date(log.StartTime).toLocaleString()}</div>
-                <div><strong>Status:</strong> ${log.Status}</div>
-              </div>
-            </div>
-            
-            ${
-              hasErrors
-                ? `
-              <div style="margin-bottom: 12px;">
-                <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Errors Found</div>
-                <div style="font-family: monospace; font-size: 9px; background: #fef2f2; padding: 6px; border-radius: 3px; border: 1px solid #fecaca; color: #991b1b; white-space: pre-wrap; max-height: 120px; overflow: auto;">
-                  ${log.parsed.errors.map((error) => error.message).join("\n")}
-                </div>
-              </div>
-            `
-                : ""
-            }
-            
-            ${
-              log.parsed?.checkoutEvents?.length > 0
-                ? `
-              <div style="margin-bottom: 12px;">
-                <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Checkout Events (${log.parsed.checkoutEvents.length})</div>
-                <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd; white-space: pre-wrap; max-height: 120px; overflow: auto;">
-                  ${log.parsed.checkoutEvents
-                    .slice(0, 5)
-                    .map((event) => event.event)
-                    .join("\n")}
-                  ${log.parsed.checkoutEvents.length > 5 ? "\n... and " + (log.parsed.checkoutEvents.length - 5) + " more" : ""}
-                </div>
-              </div>
-            `
-                : ""
-            }
-            
-            ${
-              log.parsed?.paymentEvents?.length > 0
-                ? `
-              <div style="margin-bottom: 12px;">
-                <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Payment Events (${log.parsed.paymentEvents.length})</div>
-                <div style="font-family: monospace; font-size: 9px; background: #fef3c7; padding: 6px; border-radius: 3px; border: 1px solid #fde68a; white-space: pre-wrap; max-height: 120px; overflow: auto;">
-                  ${log.parsed.paymentEvents
-                    .slice(0, 5)
-                    .map((event) => event.event)
-                    .join("\n")}
-                  ${log.parsed.paymentEvents.length > 5 ? "\n... and " + (log.parsed.paymentEvents.length - 5) + " more" : ""}
-                </div>
-              </div>
-            `
-                : ""
-            }
-            
-            <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Full Log Content</div>
-              <div style="font-family: monospace; font-size: 8px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0; white-space: pre-wrap; max-height: 200px; overflow: auto;">
-                ${log.body ? log.body.substring(0, 2000) + (log.body.length > 2000 ? "..." : "") : "No log content available"}
-              </div>
-            </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 10px; color: #6b7280;">${new Date(log.timestamp).toLocaleTimeString()}</span>
           </div>
         </div>
-      `
+        <div class="sfcc-log-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
+          <div style="margin-bottom: 12px;">
+            <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Log Details</div>
+            <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">
+              <div><strong>Level:</strong> ${log.level}</div>
+              <div><strong>Message:</strong> ${log.message}</div>
+              <div><strong>Time:</strong> ${new Date(log.timestamp).toLocaleString()}</div>
+              ${log.source ? `<div><strong>Source:</strong> ${log.source}</div>` : ""}
+              ${log.category ? `<div><strong>Category:</strong> ${log.category}</div>` : ""}
+            </div>
+          </div>
+          
+          ${
+            log.details
+              ? `
+            <div style="margin-bottom: 12px;">
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Additional Details</div>
+              <div style="font-family: monospace; font-size: 9px; background: #f0fdf4; padding: 6px; border-radius: 3px; border: 1px solid #bbf7d0; white-space: pre-wrap; max-height: 120px; overflow: auto;">
+                ${typeof log.details === "string" ? log.details : JSON.stringify(log.details, null, 2)}
+              </div>
+            </div>
+          `
+              : ""
+          }
+        </div>
+      </div>
+    `
       })
       .join("")
   }
@@ -1270,59 +1702,69 @@ vertical-align: baseline !important;
   renderErrors() {
     if (this.errors.length === 0) {
       return `
-      <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
-        <div style="font-size: 32px; margin-bottom: 12px;">✅</div>
-        <div>No errors detected</div>
-        <div style="font-size: 10px; margin-top: 8px;">Errors will appear here when network calls fail</div>
-      </div>
-    `
+    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+      <div style="font-size: 32px; margin-bottom: 12px;">✅</div>
+      <div>No errors detected</div>
+      <div style="font-size: 10px; margin-top: 8px;">Errors will appear here when detected</div>
+    </div>
+  `
     }
 
     return this.errors
-      .slice(-10) // Show only last 10 errors
-      .reverse()
-      .map(
-        (error) => `
-    <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid #ef4444;">
-      <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 8px;">
-        <div style="font-weight: 600; font-size: 12px; color: #991b1b;">${error.type || "Network Error"}</div>
-        <div style="font-size: 10px; color: #6b7280;">${new Date(error.timestamp).toLocaleTimeString()}</div>
+      .map((error) => {
+        return `
+      <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; margin-bottom: 8px; padding: 12px;">
+        <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 8px;">
+          <div style="font-weight: 600; font-size: 11px; color: #dc2626;">${error.type || "Error"}</div>
+          <div style="font-size: 10px; color: #6b7280;">${new Date(error.timestamp).toLocaleTimeString()}</div>
+        </div>
+        <div style="font-size: 10px; color: #374151; margin-bottom: 8px;">${error.message}</div>
+        ${
+          error.details
+            ? `
+          <div style="font-family: monospace; font-size: 9px; background: white; padding: 6px; border-radius: 3px; border: 1px solid #fecaca; white-space: pre-wrap; max-height: 120px; overflow: auto;">
+            ${typeof error.details === "string" ? error.details : JSON.stringify(error.details, null, 2)}
+          </div>
+        `
+            : ""
+        }
       </div>
-      <div style="font-family: monospace; font-size: 10px; color: #7f1d1d; margin-bottom: 8px;">${error.message}</div>
-      ${
-        error.url
-          ? `<div style="font-family: monospace; font-size: 9px; color: #6b7280; background: white; padding: 4px 6px; border-radius: 3px; word-break: break-all;">${error.url}</div>`
-          : ""
-      }
-    </div>
-  `,
-      )
+    `
+      })
       .join("")
-  }
-
-  getFilteredNetworkCalls() {
-    if (!this.activeFilter) return this.networkCalls
-
-    return this.networkCalls.filter((call) => {
-      const stage = this.mapUrlToRequirement(call.url)
-      return stage === this.activeFilter
-    })
   }
 
   getMethodColor(method) {
     const colors = {
-      GET: "#22c55e",
+      GET: "#10b981",
       POST: "#3b82f6",
       PUT: "#f59e0b",
-      PATCH: "#8b5cf6",
       DELETE: "#ef4444",
+      PATCH: "#8b5cf6",
     }
     return colors[method] || "#6b7280"
   }
 
+  getStatusColor(status) {
+    if (status >= 200 && status < 300) return "#10b981"
+    if (status >= 300 && status < 400) return "#f59e0b"
+    if (status >= 400) return "#ef4444"
+    return "#6b7280"
+  }
+
+  getLogLevelColor(level) {
+    const colors = {
+      ERROR: "#ef4444",
+      WARN: "#f59e0b",
+      INFO: "#3b82f6",
+      DEBUG: "#6b7280",
+    }
+    return colors[level] || "#6b7280"
+  }
+
   truncateUrl(url) {
-    if (url.length <= 60) return url
-    return url.substring(0, 30) + "..." + url.substring(url.length - 27)
+    if (url.length <= 50) return url
+    return url.substring(0, 47) + "..."
   }
 
   updateStatus() {
@@ -1342,454 +1784,752 @@ vertical-align: baseline !important;
 
   updateCheckoutStatus() {
     const statusElement = document.getElementById("sfcc-checkout-status")
-    if (!statusElement) return
-
-    // Determine checkout status based on recent network calls
-    const recentCalls = this.networkCalls.filter((call) => Date.now() - call.timestamp < 30000) // Last 30 seconds
-
-    let status = "Unknown"
-    let bgColor = "#f3f4f6"
-    let textColor = "#6b7280"
-
-    if (recentCalls.length > 0) {
-      // Check for specific checkout stages
-      const hasPayment = recentCalls.some((call) => call.url.includes("payment"))
-      const hasDelivery = recentCalls.some((call) => call.url.includes("delivery"))
-      const hasAddress = recentCalls.some((call) => call.url.includes("address"))
-      const hasCheckout = recentCalls.some((call) => call.url.includes("checkout"))
-
-      if (hasPayment) {
-        status = "Payment"
-        bgColor = "#fef3c7"
-        textColor = "#92400e"
-      } else if (hasDelivery) {
-        status = "Delivery"
-        bgColor = "#dbeafe"
-        textColor = "#1d4ed8"
-      } else if (hasAddress) {
-        status = "Address"
-        bgColor = "#e0e7ff"
-        textColor = "#3730a3"
-      } else if (hasCheckout) {
-        status = "Active"
-        bgColor = "#dcfce7"
-        textColor = "#166534"
+    if (statusElement) {
+      if (this.checkoutStatus) {
+        this.safeSetTextContent(statusElement, this.checkoutStatus)
+        this.safeSetStyle(statusElement, "background", "#dcfce7")
+        this.safeSetStyle(statusElement, "color", "#166534")
       } else {
-        status = "Browsing"
-        bgColor = "#f3f4f6"
-        textColor = "#6b7280"
+        this.safeSetTextContent(statusElement, "Unknown")
+        this.safeSetStyle(statusElement, "background", "#f3f4f6")
+        this.safeSetStyle(statusElement, "color", "#6b7280")
       }
     }
-
-    this.safeSetTextContent(statusElement, status)
-    this.safeSetStyle(statusElement, "background", bgColor)
-    this.safeSetStyle(statusElement, "color", textColor)
   }
 
   updateTabStatusIndicator() {
     const indicator = document.getElementById("sfcc-tab-status-indicator")
-    if (!indicator) return
-
-    // Update indicator based on activity
-    const hasRecentActivity = this.networkCalls.some((call) => Date.now() - call.timestamp < 5000) // Last 5 seconds
-    const hasErrors = this.errors.length > 0
-
-    if (hasErrors) {
-      this.safeSetStyle(indicator, "background", "#ef4444") // Red for errors
-    } else if (hasRecentActivity) {
-      this.safeSetStyle(indicator, "background", "#22c55e") // Green for recent activity
-    } else if (this.isMonitoring) {
-      this.safeSetStyle(indicator, "background", "#60a5fa") // Blue for monitoring
-    } else {
-      this.safeSetStyle(indicator, "background", "#6b7280") // Gray for inactive
+    if (indicator) {
+      if (this.isMonitoring && this.networkCalls.length > 0) {
+        this.safeSetStyle(indicator, "background", "#22c55e") // Green for active with data
+      } else if (this.isMonitoring) {
+        this.safeSetStyle(indicator, "background", "#f59e0b") // Yellow for active but no data
+      } else {
+        this.safeSetStyle(indicator, "background", "#6b7280") // Gray for inactive
+      }
     }
   }
 
   updateSessionInfo() {
     try {
-      const callCountEl = document.getElementById("sfcc-call-count")
-      const errorCountEl = document.getElementById("sfcc-error-count")
-      const durationEl = document.getElementById("sfcc-session-duration")
-      const correlationCountEl = document.getElementById("sfcc-correlation-count")
-
-      if (callCountEl) this.safeSetTextContent(callCountEl, this.networkCalls.length.toString())
-      if (errorCountEl) this.safeSetTextContent(errorCountEl, this.errors.length.toString())
-      if (correlationCountEl) this.safeSetTextContent(correlationCountEl, this.salesforceLogs.length.toString())
-
-      if (durationEl) {
-        const duration = Math.floor((Date.now() - this.sessionStart) / 1000)
-        this.safeSetTextContent(durationEl, `${duration}s`)
+      // Update call count
+      const callCountElement = document.getElementById("sfcc-call-count")
+      if (callCountElement) {
+        this.safeSetTextContent(callCountElement, this.networkCalls.length.toString())
       }
+
+      // Update error count
+      const errorCountElement = document.getElementById("sfcc-error-count")
+      if (errorCountElement) {
+        this.safeSetTextContent(errorCountElement, this.errors.length.toString())
+      }
+
+      // Update session duration
+      const durationElement = document.getElementById("sfcc-session-duration")
+      if (durationElement) {
+        const duration = Math.floor((Date.now() - this.sessionStart) / 1000)
+        this.safeSetTextContent(durationElement, `${duration}s`)
+      }
+
+      // Update correlation count
+      const correlationCountElement = document.getElementById("sfcc-correlation-count")
+      if (correlationCountElement) {
+        this.safeSetTextContent(correlationCountElement, this.salesforceLogs.length.toString())
+      }
+
+      // Update current session display
+      this.updateCurrentSessionDisplay()
     } catch (error) {
       console.warn("Error updating session info:", error)
     }
   }
 
   startMonitoring() {
+    if (this.isMonitoring) return
+
     this.isMonitoring = true
-    console.log("SFCC monitoring started")
-    this.updateStatus()
+    console.log("🟢 Started monitoring SFCC checkout calls")
+
+    // Don't create session here - wait for checkout ID
+    console.log("⏳ Waiting for checkout ID to create session...")
+
+    // Start auto-save interval
+    if (this.autoSaveInterval) {
+      clearInterval(this.autoSaveInterval)
+    }
+    this.autoSaveInterval = setInterval(() => {
+      this.autoSaveCurrentSession()
+    }, 30000) // Auto-save every 30 seconds
+
+    this.updatePanelContent()
   }
 
   stopMonitoring() {
+    if (!this.isMonitoring) return
+
     this.isMonitoring = false
-    console.log("SFCC monitoring stopped")
-    this.updateStatus()
+    console.log("🔴 Stopped monitoring SFCC checkout calls")
+
+    // Clear auto-save interval
+    if (this.autoSaveInterval) {
+      clearInterval(this.autoSaveInterval)
+      this.autoSaveInterval = null
+    }
+
+    this.updatePanelContent()
+  }
+
+  // Enhanced checkout ID extraction for Salesforce Commerce API endpoints
+  extractCheckoutId(callData) {
+    const url = callData.url
+    const requestBody = callData.requestBody
+    const responseBody = callData.responseBody || callData.response
+
+    console.log("🔍 Extracting checkout ID from:", {
+      url: url,
+      hasRequestBody: !!requestBody,
+      hasResponseBody: !!responseBody,
+    })
+
+    // Priority 1: Extract from Salesforce Commerce API URLs
+    // Pattern: /webruntime/api/services/data/v64.0/commerce/webstores/{webstoreId}/checkouts/{checkoutId}
+    const salesforceCheckoutMatch = url.match(/\/checkouts\/([a-zA-Z0-9]{15,18})(?:\?|$)/)
+    if (salesforceCheckoutMatch) {
+      const checkoutId = salesforceCheckoutMatch[1]
+      console.log("✅ Found checkout ID in Salesforce URL:", checkoutId)
+      return checkoutId
+    }
+
+    // Priority 2: Extract from response body (for both checkout endpoints)
+    if (responseBody) {
+      let parsedResponse = responseBody
+      if (typeof responseBody === "string") {
+        try {
+          parsedResponse = JSON.parse(responseBody)
+        } catch (e) {
+          console.warn("Failed to parse response body as JSON")
+        }
+      }
+
+      if (parsedResponse && typeof parsedResponse === "object") {
+        // Direct checkoutId field
+        if (parsedResponse.checkoutId) {
+          console.log("✅ Found checkout ID in response.checkoutId:", parsedResponse.checkoutId)
+          return parsedResponse.checkoutId
+        }
+
+        // Check for id field (common in Salesforce APIs)
+        if (parsedResponse.id && parsedResponse.id.length >= 15) {
+          console.log("✅ Found checkout ID in response.id:", parsedResponse.id)
+          return parsedResponse.id
+        }
+
+        // Check nested data structures
+        if (parsedResponse.data) {
+          if (parsedResponse.data.checkoutId) {
+            console.log("✅ Found checkout ID in response.data.checkoutId:", parsedResponse.data.checkoutId)
+            return parsedResponse.data.checkoutId
+          }
+          if (parsedResponse.data.id && parsedResponse.data.id.length >= 15) {
+            console.log("✅ Found checkout ID in response.data.id:", parsedResponse.data.id)
+            return parsedResponse.data.id
+          }
+        }
+      }
+    }
+
+    // Priority 3: Extract from request body
+    if (requestBody) {
+      let parsedBody = requestBody
+      if (typeof requestBody === "string") {
+        try {
+          parsedBody = JSON.parse(requestBody)
+        } catch (e) {
+          // Check for checkout ID in string format
+          const stringMatch = requestBody.match(/checkoutId["':\s]*([a-zA-Z0-9]{15,18})/)
+          if (stringMatch) {
+            console.log("✅ Found checkout ID in request body string:", stringMatch[1])
+            return stringMatch[1]
+          }
+        }
+      }
+
+      if (parsedBody && typeof parsedBody === "object") {
+        if (parsedBody.checkoutId) {
+          console.log("✅ Found checkout ID in request.checkoutId:", parsedBody.checkoutId)
+          return parsedBody.checkoutId
+        }
+        if (parsedBody.id && parsedBody.id.length >= 15) {
+          console.log("✅ Found checkout ID in request.id:", parsedBody.id)
+          return parsedBody.id
+        }
+      }
+    }
+
+    console.log("❌ No checkout ID found in call data")
+    return null
   }
 
   handleNetworkCall(callData) {
-    if (!this.isMonitoring) return
-
     try {
-      // Use the analyzer if available, otherwise fall back to existing logic
-      let enhancedCall = callData
-      if (this.analyzer) {
-        enhancedCall = this.analyzer.analyzeCall(callData)
-
-        // Log detailed analysis for debugging
-        if (enhancedCall.callType) {
-          console.log(`✅ Call analyzed as: ${enhancedCall.callType}`, {
-            url: callData.url.split("/").pop(),
-            method: callData.method,
-            stage: enhancedCall.checkoutStage,
-            successful: enhancedCall.isSuccessful,
-            hasPayload: !!callData.requestBody,
-            payloadKeys: this.getPayloadKeys(callData.requestBody),
-            responseKeys: this.getResponseKeys(callData.response),
-          })
-        } else {
-          console.log(`❓ Call not categorized:`, {
-            url: callData.url.split("/").pop(),
-            method: callData.method,
-            hasPayload: !!callData.requestBody,
-            payloadKeys: this.getPayloadKeys(callData.requestBody),
-            responseKeys: this.getResponseKeys(callData.response),
-          })
+      // Analyze the call if analyzer is available
+      if (this.analyzer && typeof this.analyzer.analyzeCall === "function") {
+        try {
+          callData.analysis = this.analyzer.analyzeCall(callData)
+        } catch (error) {
+          console.warn("Error analyzing call:", error)
         }
-
-        // Update checkout data using analyzer
-        this.checkoutData = this.analyzer.updateCheckoutData(this.checkoutData, enhancedCall)
-      } else {
-        // Fallback to existing extraction logic
-        this.extractCheckoutData(callData)
-        enhancedCall.checkoutStage = this.detectCheckoutStage(callData.url, callData.requestBody)
       }
 
-      // Add timestamp and ID
-      enhancedCall.timestamp = Date.now()
-      enhancedCall.id = this.generateId()
+      // Extract checkout ID from the call using enhanced extraction
+      const extractedCheckoutId = this.extractCheckoutId(callData)
+
+      if (extractedCheckoutId) {
+        console.log("🆔 Extracted checkout ID:", extractedCheckoutId, "from:", callData.url)
+
+        // Check if we need to switch sessions or create first session
+        if (!this.currentCheckoutId && !this.currentSession) {
+          // First checkout ID detected - create initial session
+          console.log("🆔 First checkout ID detected, creating initial session:", extractedCheckoutId)
+          this.currentCheckoutId = extractedCheckoutId
+          this.createNewSessionWithCheckoutId(extractedCheckoutId)
+        } else if (this.currentCheckoutId && this.currentCheckoutId !== extractedCheckoutId) {
+          // Checkout ID changed - handle transition
+          console.log("🔄 Checkout ID changed from", this.currentCheckoutId, "to", extractedCheckoutId)
+          this.handleCheckoutIdChange(extractedCheckoutId)
+        } else if (!this.currentCheckoutId) {
+          // Have a session but no checkout ID - update it
+          console.log("🆔 Adding checkout ID to existing session:", extractedCheckoutId)
+          this.currentCheckoutId = extractedCheckoutId
+          if (this.currentSession) {
+            this.currentSession.checkoutId = extractedCheckoutId
+          }
+        }
+      }
 
       // Add to network calls
-      this.networkCalls.push(enhancedCall)
+      this.networkCalls.push(callData)
 
-      // Limit array size to prevent memory issues
-      if (this.networkCalls.length > 100) {
-        this.networkCalls = this.networkCalls.slice(-50)
+      // Add to current session if it exists
+      if (this.currentSession) {
+        if (!this.currentSession.networkCalls) {
+          this.currentSession.networkCalls = []
+        }
+        this.currentSession.networkCalls.push(callData)
       }
 
-      // Run correlation if engine is available
-      if (this.correlationEngine && this.salesforceLogs.length > 0) {
-        const newCorrelations = this.correlationEngine.correlateAll([enhancedCall], this.salesforceLogs)
-        this.correlations.push(...newCorrelations)
+      // Update checkout data based on the call
+      this.updateCheckoutData(callData)
 
-        // Limit correlations
-        if (this.correlations.length > 100) {
-          this.correlations = this.correlations.slice(-50)
-        }
-
-        if (newCorrelations.length > 0) {
-          console.log(
-            `🔗 Generated ${newCorrelations.length} new correlations for ${enhancedCall.callType || "unknown"} call`,
-          )
+      // Create correlations if correlation engine is available
+      if (this.correlationEngine && typeof this.correlationEngine.createCorrelations === "function") {
+        try {
+          const newCorrelations = this.correlationEngine.createCorrelations([callData], this.salesforceLogs)
+          this.correlations.push(...newCorrelations)
+        } catch (error) {
+          console.warn("Error creating correlations:", error)
         }
       }
 
       // Update panel if it's open
       this.updatePanelContent()
+
+      console.log("📞 Network call processed:", callData.method, callData.url)
     } catch (error) {
       console.error("Error handling network call:", error)
     }
   }
 
-  // Add helper methods for debugging
-  getPayloadKeys(requestBody) {
-    try {
-      const body = this.parseRequestBody(requestBody)
-      if (!body) return []
-      return Object.keys(body).slice(0, 5) // Limit to first 5 keys
-    } catch (e) {
-      return []
-    }
-  }
-
-  getResponseKeys(response) {
-    try {
-      if (!response || typeof response !== "object") return []
-      return Object.keys(response).slice(0, 5) // Limit to first 5 keys
-    } catch (e) {
-      return []
-    }
-  }
-
-  parseRequestBody(requestBody) {
-    if (!requestBody) return null
-
-    try {
-      return typeof requestBody === "string" ? JSON.parse(requestBody) : requestBody
-    } catch (e) {
-      return null
-    }
-  }
-
-  detectCheckoutStage(url, requestBody) {
-    const urlLower = url.toLowerCase()
-
-    // Enhanced delivery method detection
-    if (urlLower.includes("delivery") || urlLower.includes("shipping")) {
-      // Check if it's updating delivery method specifically
-      if (requestBody && typeof requestBody === "object") {
-        if (
-          requestBody.deliveryMethodId ||
-          (typeof requestBody === "string" && requestBody.includes("deliveryMethodId"))
-        ) {
-          return "delivery-method"
-        }
-      }
-      return "delivery"
-    }
-
-    if (urlLower.includes("address")) return "address"
-    if (urlLower.includes("payment")) return "payment"
-    if (urlLower.includes("tax")) return "taxes"
-    if (urlLower.includes("inventory") || urlLower.includes("stock")) return "inventory"
-    if (urlLower.includes("checkout")) return "checkout"
-
-    return null
-  }
-
-  extractCheckoutData(callData) {
-    try {
-      const url = callData.url.toLowerCase()
-      const response = callData.response
-      const request = callData.requestBody
-
-      // Extract checkout ID from various sources
-      if (response) {
-        if (response.checkoutId) {
-          callData.checkoutId = response.checkoutId
-        } else if (response.cartSummary?.cartId) {
-          callData.checkoutId = response.cartSummary.cartId
-        }
-      }
-
-      // Enhanced delivery method detection
-      if (url.includes("delivery") || url.includes("shipping")) {
-        this.checkoutData.deliveryMethod = true
-
-        // Extract delivery method details from response
-        if (response?.deliveryGroups?.items) {
-          const deliveryGroup = response.deliveryGroups.items[0]
-          if (deliveryGroup?.selectedDeliveryMethod) {
-            this.checkoutData.selectedDeliveryMethod = {
-              id: deliveryGroup.selectedDeliveryMethod.id,
-              name: deliveryGroup.selectedDeliveryMethod.name,
-              fee: deliveryGroup.selectedDeliveryMethod.shippingFee,
-              carrier: deliveryGroup.selectedDeliveryMethod.carrier,
-            }
-            console.log("✅ Delivery method selected:", this.checkoutData.selectedDeliveryMethod)
-          }
-
-          if (deliveryGroup?.availableDeliveryMethods) {
-            this.checkoutData.availableDeliveryMethods = deliveryGroup.availableDeliveryMethods
-            console.log("📦 Available delivery methods:", deliveryGroup.availableDeliveryMethods.length)
-          }
-        }
-
-        // Extract from request payload for delivery method updates
-        if (request && typeof request === "object" && request.deliveryMethodId) {
-          this.checkoutData.requestedDeliveryMethodId = request.deliveryMethodId
-          console.log("🚚 Delivery method update requested:", request.deliveryMethodId)
-        }
-      }
-
-      if (url.includes("address")) {
-        this.checkoutData.shippingAddress = true
-        if (response?.deliveryGroups?.items?.[0]?.deliveryAddress) {
-          this.checkoutData.addressDetails = response.deliveryGroups.items[0].deliveryAddress
-        }
-      }
-
-      if (url.includes("payment")) {
-        this.checkoutData.payment = true
-        if (response?.paymentMethods) {
-          this.checkoutData.paymentMethods = response.paymentMethods
-        }
-      }
-
-      if (url.includes("tax")) {
-        this.checkoutData.taxes = true
-        if (response?.cartSummary?.totalTaxAmount) {
-          this.checkoutData.taxAmount = response.cartSummary.totalTaxAmount
-        }
-      }
-
-      if (url.includes("inventory") || url.includes("stock")) {
-        this.checkoutData.inventory = true
-      }
-
-      // Extract Salesforce result codes
-      if (response?.errors && Array.isArray(response.errors)) {
-        response.errors.forEach((error) => {
-          if (error.errorCode) {
-            callData.salesforceResultCode = error.errorCode
-          }
-        })
-      }
-    } catch (error) {
-      console.warn("Error extracting checkout data:", error)
-    }
-  }
-
-  handleError(errorData) {
-    this.errors.push({
-      ...errorData,
-      timestamp: Date.now(),
-      id: this.generateId(),
-    })
-
-    // Limit errors array
-    if (this.errors.length > 20) {
-      this.errors = this.errors.slice(-10)
-    }
-
-    this.updatePanelContent()
-    console.error("SFCC Error captured:", errorData)
-  }
-
-  clearData() {
-    this.networkCalls = []
-    this.errors = []
-    this.checkoutData = {}
-    this.salesforceLogs = []
-    this.correlations = []
-    this.sessionStart = Date.now()
-    this.updatePanelContent()
-    console.log("SFCC data cleared")
-  }
-
-  exportData() {
-    const data = {
-      timestamp: new Date().toISOString(),
-      sessionDuration: Date.now() - this.sessionStart,
-      networkCalls: this.networkCalls,
-      errors: this.errors,
-      checkoutData: this.checkoutData,
-      salesforceLogs: this.salesforceLogs,
-      correlations: this.correlations,
-      url: window.location.href,
-    }
-
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `sfcc-debug-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.json`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-
-    console.log("SFCC data exported")
-  }
-
-  async syncSalesforceData() {
-    if (!this.isContextValid()) {
-      console.warn("Cannot sync - extension context invalid")
+  createNewSessionWithCheckoutId(checkoutId) {
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot create session")
       return
     }
 
     try {
-      const syncBtn = document.getElementById("sfcc-sync-btn")
-      if (syncBtn) {
-        this.safeSetTextContent(syncBtn, "Syncing...")
-        this.safeSetStyle(syncBtn, "opacity", "0.6")
-      }
+      // Check if there's already an existing session for this checkout ID
+      const existingSession = this.sessionManager.findSessionByCheckoutId(checkoutId)
 
-      // Get connection info from storage
-      const connectionData = await this.safeChromeCall(() => {
-        return this.chrome.storage.local.get(["salesforceAccounts", "activeAccountId"])
-      }, {})
-
-      if (!connectionData.salesforceAccounts || !connectionData.activeAccountId) {
-        console.warn("No Salesforce account selected")
+      if (existingSession && !existingSession.endTime) {
+        console.log("🔄 Found existing active session for checkout ID, loading it:", existingSession.id)
+        this.loadSession(existingSession.id)
         return
       }
 
-      // Find the active account
-      const activeAccount = connectionData.salesforceAccounts.find((acc) => acc.id === connectionData.activeAccountId)
+      // Create new session with checkout ID
+      const sessionData = {
+        name: `Checkout ${checkoutId.substring(0, 8)} - ${new Date().toLocaleTimeString()}`,
+        checkoutId: checkoutId,
+        startTime: Date.now(),
+        networkCalls: [...this.networkCalls],
+        errors: [...this.errors],
+        salesforceLogs: [...this.salesforceLogs],
+        correlations: [...this.correlations],
+        checkoutData: { ...this.checkoutData },
+      }
 
-      if (!activeAccount) {
-        console.warn("Active account not found")
+      console.log("📝 Creating new session with checkout ID:", checkoutId)
+
+      if (typeof this.sessionManager.createNewSession === "function") {
+        this.currentSession = this.sessionManager.createNewSession(sessionData)
+        console.log("✅ Created new session with checkout ID:", this.currentSession.id, checkoutId)
+      } else {
+        console.error("No session creation method available")
         return
       }
 
-      // Create API instance and connect
-      const salesforceAPI = new SalesforceAPI()
-      const connectResult = await salesforceAPI.connect(activeAccount.instanceUrl, activeAccount.sessionId)
+      this.updatePanelContent()
+    } catch (error) {
+      console.error("Error creating new session with checkout ID:", error)
+    }
+  }
 
-      if (!connectResult.success) {
-        console.error("❌ Sync failed:", connectResult.error)
+  async checkForExistingSession(checkoutId) {
+    if (!this.sessionManager || !checkoutId) return
+
+    try {
+      console.log("🔍 Checking for existing session with checkout ID:", checkoutId)
+
+      // Load sessions first to ensure we have the latest data
+      await this.sessionManager.loadSessions()
+
+      const existingSession = this.sessionManager.findSessionByCheckoutId(checkoutId)
+
+      if (existingSession && !existingSession.endTime) {
+        console.log("🔄 Found existing active session for checkout ID, switching...")
+
+        // Load the existing session
+        this.loadSession(existingSession.id)
+        return true
+      }
+
+      console.log("ℹ️ No existing active session found for checkout ID:", checkoutId)
+      return false
+    } catch (error) {
+      console.error("Error checking for existing session:", error)
+      return false
+    }
+  }
+
+  handleCheckoutIdChange(newCheckoutId) {
+    console.log("🔄 Handling checkout ID change:", this.currentCheckoutId, "->", newCheckoutId)
+
+    // Check if there's an existing session with this checkout ID
+    this.checkForExistingSession(newCheckoutId).then((foundExisting) => {
+      if (!foundExisting) {
+        // No existing session found, update current session with new checkout ID
+        this.currentCheckoutId = newCheckoutId
+        if (this.currentSession) {
+          this.currentSession.checkoutId = newCheckoutId
+          console.log("✅ Updated current session with new checkout ID:", newCheckoutId)
+          this.updatePanelContent()
+        }
+      }
+    })
+  }
+
+  createOrContinueSession() {
+    // This method is now only called when we have a checkout ID
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot create session")
+      return
+    }
+
+    if (!this.currentCheckoutId) {
+      console.log("⏳ No checkout ID available yet, waiting...")
+      return
+    }
+
+    try {
+      // Check if we already have an active session
+      if (this.currentSession && this.currentSession.id) {
+        console.log("📋 Continuing existing session:", this.currentSession.id)
         return
       }
 
-      // Fetch logs directly
-      const { logs } = await salesforceAPI.getDebugLogs({
-        startTime: new Date(Date.now() - 60 * 60 * 1000),
-        endTime: new Date(),
-        maxRecords: 50,
+      // Create new session with checkout ID
+      this.createNewSessionWithCheckoutId(this.currentCheckoutId)
+    } catch (error) {
+      console.error("Error creating or continuing session:", error)
+    }
+  }
+
+  createNewSession() {
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot create session")
+      return
+    }
+
+    try {
+      const sessionData = {
+        name: `Checkout Session ${new Date().toLocaleTimeString()}`,
+        checkoutId: this.currentCheckoutId,
+        startTime: Date.now(),
+        networkCalls: [...this.networkCalls],
+        errors: [...this.errors],
+        salesforceLogs: [...this.salesforceLogs],
+        correlations: [...this.correlations],
+        checkoutData: { ...this.checkoutData },
+      }
+
+      console.log("📝 Creating new session with data:", {
+        checkoutId: sessionData.checkoutId,
+        networkCallsCount: sessionData.networkCalls.length,
       })
 
-      console.log(`✅ Retrieved ${logs.length} Salesforce logs from ${activeAccount.name}`)
-
-      // Store logs
-      this.salesforceLogs = logs
-
-      // Perform correlations if we have network calls
-      if (this.networkCalls.length > 0 && logs.length > 0 && this.correlationEngine) {
-        console.log("🔗 Starting correlation analysis...")
-
-        this.correlations = this.correlationEngine.correlateAll(this.networkCalls, logs)
-
-        console.log(`📊 Found ${this.correlations.length} correlations`)
-
-        // Log top correlations
-        if (this.correlations.length > 0) {
-          console.log("🏆 Top correlations:")
-          this.correlations.slice(0, 3).forEach((corr, i) => {
-            console.log(`${i + 1}. ${corr.type} - ${corr.confidence.toFixed(3)} confidence - ${corr.reasoning}`)
-          })
-        }
-      } else if (this.networkCalls.length > 0 && logs.length > 0 && !this.correlationEngine) {
-        console.warn("⚠️ Correlation engine not loaded, skipping correlation analysis")
+      if (typeof this.sessionManager.createNewSession === "function") {
+        this.currentSession = this.sessionManager.createNewSession(sessionData)
+        console.log("✅ Created new session:", this.currentSession.id)
+      } else if (typeof this.sessionManager.createSession === "function") {
+        this.currentSession = this.sessionManager.createSession(sessionData)
+        console.log("✅ Created new session (legacy):", this.currentSession.id)
+      } else {
+        console.error("No session creation method available")
+        return
       }
 
-      // Store everything
-      await this.safeChromeCall(() => {
-        return this.chrome.storage.local.set({
-          salesforceLogs: logs,
-          correlations: this.correlations,
-          lastSync: Date.now(),
+      this.updatePanelContent()
+    } catch (error) {
+      console.error("Error creating new session:", error)
+    }
+  }
+
+  saveCurrentSession() {
+    if (!this.currentSession || !this.sessionManager) {
+      console.warn("No current session or SessionManager to save")
+      return
+    }
+
+    try {
+      // Update session data
+      this.currentSession.networkCalls = [...this.networkCalls]
+      this.currentSession.errors = [...this.errors]
+      this.currentSession.salesforceLogs = [...this.salesforceLogs]
+      this.currentSession.correlations = [...this.correlations]
+      this.currentSession.checkoutData = { ...this.checkoutData }
+      this.currentSession.checkoutId = this.currentCheckoutId
+
+      if (typeof this.sessionManager.saveSession === "function") {
+        this.sessionManager.saveSession(this.currentSession)
+        console.log("💾 Saved current session:", this.currentSession.id)
+      } else {
+        console.warn("SessionManager.saveSession method not available")
+      }
+    } catch (error) {
+      console.error("Error saving current session:", error)
+    }
+  }
+
+  autoSaveCurrentSession() {
+    if (this.currentSession && this.isMonitoring) {
+      this.saveCurrentSession()
+    }
+  }
+
+  endCurrentSession() {
+    if (!this.currentSession) {
+      console.warn("No current session to end")
+      return
+    }
+
+    try {
+      // Mark session as ended
+      this.currentSession.endTime = Date.now()
+
+      // Save the session
+      this.saveCurrentSession()
+
+      console.log("🏁 Ended session:", this.currentSession.id)
+
+      // Clear current session
+      this.currentSession = null
+
+      // Update display
+      this.updatePanelContent()
+
+      // Refresh sessions tab if it's active
+      if (this.activeTab === "sessions") {
+        this.sessionsLoaded = false
+        this.renderTabContent()
+      }
+    } catch (error) {
+      console.error("Error ending current session:", error)
+    }
+  }
+
+  loadSession(sessionId) {
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot load session")
+      return
+    }
+
+    try {
+      if (typeof this.sessionManager.loadSession === "function") {
+        const session = this.sessionManager.loadSession(sessionId)
+
+        if (session) {
+          // Save current session first if it exists
+          if (this.currentSession && this.currentSession.id !== sessionId) {
+            this.saveCurrentSession()
+          }
+
+          // Load the session data
+          this.currentSession = session
+          this.networkCalls = session.networkCalls || []
+          this.errors = session.errors || []
+          this.salesforceLogs = session.salesforceLogs || []
+          this.correlations = session.correlations || []
+          this.checkoutData = session.checkoutData || {}
+          this.currentCheckoutId = session.checkoutId
+
+          console.log("📂 Loaded session:", sessionId, "with checkout ID:", this.currentCheckoutId)
+
+          // Update display
+          this.updatePanelContent()
+
+          // Switch to network tab to show loaded data
+          this.switchTab("network")
+        } else {
+          console.error("Session not found:", sessionId)
+        }
+      } else {
+        console.warn("SessionManager.loadSession method not available")
+      }
+    } catch (error) {
+      console.error("Error loading session:", error)
+    }
+  }
+
+  deleteSession(sessionId) {
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot delete session")
+      return
+    }
+
+    try {
+      if (typeof this.sessionManager.deleteSession === "function") {
+        this.sessionManager.deleteSession(sessionId)
+        console.log("🗑️ Deleted session:", sessionId)
+
+        // If this was the current session, clear it
+        if (this.currentSession && this.currentSession.id === sessionId) {
+          this.currentSession = null
+          this.updatePanelContent()
+        }
+
+        // Refresh sessions display
+        this.sessionsLoaded = false
+        if (this.activeTab === "sessions") {
+          this.renderTabContent()
+        }
+      } else {
+        console.warn("SessionManager.deleteSession method not available")
+      }
+    } catch (error) {
+      console.error("Error deleting session:", error)
+    }
+  }
+
+  exportSession(sessionId) {
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot export session")
+      return
+    }
+
+    try {
+      const session = this.sessionManager.loadSession(sessionId)
+      if (session) {
+        const exportData = {
+          session: session,
+          exportTime: new Date().toISOString(),
+          version: "1.0",
+        }
+
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `sfcc-session-${sessionId}-${new Date().toISOString().split("T")[0]}.json`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+
+        console.log("📤 Exported session:", sessionId)
+      }
+    } catch (error) {
+      console.error("Error exporting session:", error)
+    }
+  }
+
+  clearAllSessions() {
+    if (!confirm("Are you sure you want to clear all sessions? This cannot be undone.")) {
+      return
+    }
+
+    if (!this.sessionManager) {
+      console.warn("SessionManager not available, cannot clear sessions")
+      return
+    }
+
+    try {
+      if (typeof this.sessionManager.clearAllSessions === "function") {
+        this.sessionManager.clearAllSessions()
+        console.log("🗑️ Cleared all sessions")
+
+        // Clear current session
+        this.currentSession = null
+
+        // Reset sessions loaded flag
+        this.sessionsLoaded = false
+
+        // Update display
+        this.updatePanelContent()
+
+        // Refresh sessions tab if active
+        if (this.activeTab === "sessions") {
+          this.renderTabContent()
+        }
+      } else {
+        console.warn("SessionManager.clearAllSessions method not available")
+      }
+    } catch (error) {
+      console.error("Error clearing all sessions:", error)
+    }
+  }
+
+  handleError(errorData) {
+    this.errors.push(errorData)
+
+    // Add to current session if it exists
+    if (this.currentSession) {
+      if (!this.currentSession.errors) {
+        this.currentSession.errors = []
+      }
+      this.currentSession.errors.push(errorData)
+    }
+
+    this.updatePanelContent()
+    console.log("❌ Error captured:", errorData.message)
+  }
+
+  updateCheckoutData(callData) {
+    // This method analyzes network calls to determine checkout progress
+    const url = callData.url.toLowerCase()
+    const method = callData.method
+    const status = callData.status
+
+    // Only process successful calls
+    if (status < 200 || status >= 300) return
+
+    // Map different API endpoints to checkout requirements
+    if (url.includes("/addresses") || url.includes("/delivery-address") || url.includes("/shipping-address")) {
+      this.checkoutData.shippingAddress = true
+    }
+
+    if (url.includes("/billing-address")) {
+      this.checkoutData.billingAddress = true
+    }
+
+    if (url.includes("/delivery-methods") || url.includes("/shipping-methods")) {
+      this.checkoutData.deliveryMethod = true
+    }
+
+    if (url.includes("/inventory") || url.includes("/cart-items")) {
+      this.checkoutData.inventory = true
+    }
+
+    if (url.includes("/taxes") || url.includes("/tax")) {
+      this.checkoutData.taxes = true
+    }
+
+    if (url.includes("/payments") || url.includes("/payment")) {
+      this.checkoutData.payment = true
+    }
+
+    // Handle /active endpoint by analyzing request body
+    if (url.includes("/active") && callData.requestBody) {
+      try {
+        let parsedBody = callData.requestBody
+        if (typeof callData.requestBody === "string") {
+          parsedBody = JSON.parse(callData.requestBody)
+        }
+
+        if (parsedBody.deliveryMethodId) {
+          this.checkoutData.deliveryMethod = true
+        }
+
+        if (parsedBody.deliveryAddress || parsedBody.shippingAddress) {
+          this.checkoutData.shippingAddress = true
+        }
+
+        if (parsedBody.billingAddress) {
+          this.checkoutData.billingAddress = true
+        }
+
+        if (parsedBody.paymentMethodId || parsedBody.paymentDetails) {
+          this.checkoutData.payment = true
+        }
+      } catch (error) {
+        // Silent fail for JSON parsing errors
+      }
+    }
+
+    // Determine overall checkout status
+    const completedRequirements = this.requirements.filter((req) => this.checkoutData[req.key]).length
+    const totalRequirements = this.requirements.filter((req) => req.required).length
+
+    if (completedRequirements === 0) {
+      this.checkoutStatus = "Started"
+    } else if (completedRequirements < totalRequirements) {
+      this.checkoutStatus = "In Progress"
+    } else {
+      this.checkoutStatus = "Ready"
+    }
+  }
+
+  async syncSalesforceData() {
+    const syncBtn = document.getElementById("sfcc-sync-btn")
+    if (syncBtn) {
+      this.safeSetTextContent(syncBtn, "Syncing...")
+      this.safeSetStyle(syncBtn, "opacity", "0.6")
+    }
+
+    try {
+      // Send message to background script to sync Salesforce data
+      await this.safeChromeCall(async () => {
+        return new Promise((resolve, reject) => {
+          this.chrome.runtime.sendMessage(
+            {
+              action: "syncSalesforceData",
+              url: window.location.href,
+              timestamp: Date.now(),
+            },
+            (response) => {
+              if (this.chrome.runtime.lastError) {
+                reject(new Error(this.chrome.runtime.lastError.message))
+              } else if (response && response.success) {
+                resolve(response)
+              } else {
+                reject(new Error(response?.error || "Sync failed"))
+              }
+            },
+          )
         })
       })
 
-      this.updatePanelContent()
+      console.log("✅ Salesforce data sync completed")
 
-      const correlationText = this.correlations.length > 0 ? ` (${this.correlations.length} correlations)` : ""
-      console.log(`✅ Sync completed: ${logs.length} logs${correlationText}`)
+      // Update last sync time in storage
+      await this.safeChromeCall(() => {
+        return this.chrome.storage.local.set({ lastSync: Date.now() })
+      })
+
+      // Update display
+      this.updateActiveAccountDisplay()
     } catch (error) {
-      console.error("❌ Direct sync failed:", error)
+      console.error("❌ Salesforce sync failed:", error)
     } finally {
-      const syncBtn = document.getElementById("sfcc-sync-btn")
       if (syncBtn) {
         this.safeSetTextContent(syncBtn, "Sync SF")
         this.safeSetStyle(syncBtn, "opacity", "1")
@@ -1797,124 +2537,58 @@ vertical-align: baseline !important;
     }
   }
 
-  generateId() {
-    return Math.random().toString(36).substring(2, 15)
-  }
+  clearData() {
+    this.networkCalls = []
+    this.errors = []
+    this.correlations = []
+    this.checkoutData = {}
+    this.checkoutStatus = null
+    this.sessionStart = Date.now()
 
-  renderNetworkCalls() {
-    const filteredCalls = this.getFilteredNetworkCalls()
-
-    if (filteredCalls.length === 0) {
-      const filterText = this.activeFilter
-        ? `No ${this.requirements.find((r) => r.key === this.activeFilter)?.label || this.activeFilter} calls captured yet`
-        : "No network calls captured yet"
-
-      return `
-    <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
-      <div style="font-size: 32px; margin-bottom: 12px;">🌐</div>
-      <div>${filterText}</div>
-      <div style="font-size: 10px; margin-top: 8px;">Perform checkout actions to see network activity</div>
-      <div style="font-size: 10px; margin-top: 4px; color: #22c55e;">Monitoring: ${this.isMonitoring ? "Active" : "Inactive"}</div>
-      ${this.activeFilter ? `<button onclick="window.sfccMonitor.toggleFilter(null)" style="margin-top: 12px; padding: 4px 8px; background: #60a5fa; color: white; border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">Show All Calls</button>` : ""}
-    </div>
-  `
+    // Clear current session data but keep the session
+    if (this.currentSession) {
+      this.currentSession.networkCalls = []
+      this.currentSession.errors = []
+      this.currentSession.correlations = []
+      this.currentSession.checkoutData = {}
     }
 
-    return filteredCalls
-      .slice(-20) // Show only last 20 calls to avoid performance issues
-      .reverse() // Show newest first
-      .map(
-        (call) => `
-  <div class="sfcc-network-call" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden; ${call.status >= 400 ? "border-left: 3px solid #ef4444;" : ""}">
-    <div class="sfcc-network-call-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
-      <div style="display: flex; align-items: center; flex: 1;">
-        <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getMethodColor(call.method)};">${call.method}</span>
-        <span style="font-family: monospace; font-size: 10px; color: #374151; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.truncateUrl(call.url)}</span>
-        ${call.callType ? `<span style="background: #e0f2fe; color: #0369a1; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase; margin-left: 4px;">${call.callType}</span>` : ""}
-        ${call.checkoutStage ? `<span style="background: #dbeafe; color: #1d4ed8; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase; margin-left: 4px;">${call.checkoutStage}</span>` : ""}
-      </div>
-      <div style="font-size: 11px; font-weight: 600; color: ${call.status >= 400 ? "#ef4444" : "#22c55e"};">
-        ${call.status}
-      </div>
-    </div>
-    <div class="sfcc-network-call-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
-      ${
-        call.callType
-          ? `
-        <div style="margin-bottom: 12px;">
-          <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Call Analysis</div>
-          <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd;">
-            <div><strong>Type:</strong> ${call.callType}</div>
-            <div><strong>Stage:</strong> ${call.checkoutStage}</div>
-            <div><strong>Successful:</strong> ${call.isSuccessful ? "Yes" : "No"}</div>
-            ${call.deliveryMethodId ? `<div><strong>Delivery Method ID:</strong> ${call.deliveryMethodId}</div>` : ""}
-            ${call.paymentToken ? `<div><strong>Payment Token:</strong> ${call.paymentToken.substring(0, 20)}...</div>` : ""}
-          </div>
-        </div>
-      `
-          : ""
-      }
-      
-      ${
-        call.checkoutId
-          ? `
-        <div style="margin-bottom: 12px;">
-          <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Checkout Session</div>
-          <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">Checkout ID: ${call.checkoutId}</div>
-        </div>
-      `
-          : ""
-      }
-      
-      ${
-        call.salesforceResultCode
-          ? `
-        <div style="margin-bottom: 12px;">
-          <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Salesforce Result Code</div>
-          <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">${call.salesforceResultCode}</div>
-        </div>
-      `
-          : ""
-      }
-      
-      <div style="margin-bottom: 12px;">
-        <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request URL</div>
-        <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0; word-break: break-all;">${call.url}</div>
-      </div>
-      
-      ${
-        call.requestBody
-          ? `
-        <div style="margin-bottom: 12px;">
-          <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request Payload</div>
-          <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0; white-space: pre-wrap; max-height: 120px; overflow: auto;">${typeof call.requestBody === "string" ? call.requestBody : JSON.stringify(call.requestBody, null, 2)}</div>
-        </div>
-      `
-          : ""
-      }
-      
-      <div style="margin-bottom: 12px;">
-        <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Response</div>
-        <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0; white-space: pre-wrap; max-height: 200px; overflow: auto;">${call.response ? (typeof call.response === "string" ? call.response : JSON.stringify(call.response, null, 2)) : "No response body"}</div>
-      </div>
-      
-      <div style="display: flex; gap: 16px; font-size: 10px; color: #6b7280;">
-        <div><strong>Time:</strong> ${new Date(call.timestamp).toLocaleTimeString()}</div>
-        <div><strong>Duration:</strong> ${call.duration || 0}ms</div>
-        ${call.size ? `<div><strong>Size:</strong> ${call.size} bytes</div>` : ""}
-      </div>
-    </div>
-  </div>
-`,
-      )
-      .join("")
+    this.updatePanelContent()
+    console.log("🧹 Cleared all data")
+  }
+
+  exportData() {
+    const exportData = {
+      networkCalls: this.networkCalls,
+      errors: this.errors,
+      salesforceLogs: this.salesforceLogs,
+      correlations: this.correlations,
+      checkoutData: this.checkoutData,
+      checkoutStatus: this.checkoutStatus,
+      sessionStart: this.sessionStart,
+      exportTime: new Date().toISOString(),
+      url: window.location.href,
+      version: "1.0",
+    }
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `sfcc-debug-${new Date().toISOString().split("T")[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    console.log("📤 Data exported")
   }
 }
 
-// Initialize the monitor
-const monitor = new SFCCMonitor()
-
-// Make it globally accessible for debugging
-window.sfccMonitor = monitor
-
-console.log("SFCC Checkout Debugger content script loaded")
+// Initialize the monitor when the script loads
+if (typeof window !== "undefined") {
+  // Ensure we only create one instance
+  if (!window.sfccMonitor) {
+    window.sfccMonitor = new SFCCMonitor()
+  }
+}

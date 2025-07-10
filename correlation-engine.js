@@ -1,307 +1,275 @@
-class CorrelationEngine {
+// Correlation engine for matching network calls with Salesforce logs
+;(() => {
+  console.log("🔧 Loading CorrelationEngine...")
+
+  class CorrelationEngine {
     constructor() {
-      this.correlations = []
-      this.confidenceThreshold = 0.6
-      this.timeWindow = 5 * 60 * 1000 // 5 minutes
+      this.correlationRules = new Map()
+      this.initializeDefaultRules()
+      console.log("✅ CorrelationEngine initialized with", this.correlationRules.size, "rules")
     }
-  
-    correlateAll(networkCalls, salesforceLogs) {
-      console.log(`🔗 Starting correlation of ${networkCalls.length} network calls with ${salesforceLogs.length} SF logs`)
-  
-      const correlations = []
-      let totalComparisons = 0
-  
-      networkCalls.forEach((call) => {
-        const callTime = new Date(call.timestamp)
-  
-        salesforceLogs.forEach((log) => {
-          totalComparisons++
-          const logTime = new Date(log.StartTime)
-          const timeDiff = Math.abs(callTime - logTime)
-  
-          // Only correlate within time window
-          if (timeDiff <= this.timeWindow) {
-            const correlation = this.calculateCorrelation(call, log)
-  
-            if (correlation.confidence >= this.confidenceThreshold) {
-              correlations.push({
-                networkCall: call,
-                salesforceLog: log,
-                ...correlation,
-                timeDifference: timeDiff,
-              })
-            }
-          }
-        })
+
+    initializeDefaultRules() {
+      // Rule: Payment correlation
+      this.addRule("payment", {
+        networkPatterns: [/payment/i, /billing/i],
+        logPatterns: [/payment/i, /billing/i, /creditcard/i],
+        timeWindow: 30000, // 30 seconds
+        weight: 10,
+        extractors: {
+          paymentToken: (call) => call.requestBody?.paymentToken,
+          orderId: (call) => call.response?.orderId,
+        },
       })
-  
-      console.log(`📊 Completed ${totalComparisons} comparisons, found ${correlations.length} correlations`)
-  
-      // Sort by confidence
+
+      // Rule: Delivery method correlation
+      this.addRule("delivery", {
+        networkPatterns: [/delivery/i, /shipping/i],
+        logPatterns: [/delivery/i, /shipping/i, /freight/i],
+        timeWindow: 20000, // 20 seconds
+        weight: 8,
+        extractors: {
+          deliveryId: (call) => call.requestBody?.deliveryMethodId,
+          shippingAddress: (call) => call.response?.deliveryAddress,
+        },
+      })
+
+      // Rule: Cart/inventory correlation
+      this.addRule("cart", {
+        networkPatterns: [/cart/i, /inventory/i, /product/i],
+        logPatterns: [/cart/i, /inventory/i, /product/i, /stock/i],
+        timeWindow: 15000, // 15 seconds
+        weight: 6,
+        extractors: {
+          productId: (call) => call.requestBody?.productId,
+          cartId: (call) => call.response?.cartId,
+        },
+      })
+
+      // Rule: Address correlation
+      this.addRule("address", {
+        networkPatterns: [/address/i, /location/i],
+        logPatterns: [/address/i, /location/i, /geocode/i],
+        timeWindow: 25000, // 25 seconds
+        weight: 7,
+        extractors: {
+          addressId: (call) => call.response?.addressId,
+          zipCode: (call) => call.requestBody?.postalCode,
+        },
+      })
+
+      // Rule: Tax calculation correlation
+      this.addRule("tax", {
+        networkPatterns: [/tax/i, /calculate/i],
+        logPatterns: [/tax/i, /calculate/i, /rate/i],
+        timeWindow: 10000, // 10 seconds
+        weight: 9,
+        extractors: {
+          taxAmount: (call) => call.response?.totalTaxAmount,
+          jurisdiction: (call) => call.response?.taxJurisdiction,
+        },
+      })
+    }
+
+    addRule(name, config) {
+      this.correlationRules.set(name, {
+        name,
+        networkPatterns: config.networkPatterns || [],
+        logPatterns: config.logPatterns || [],
+        timeWindow: config.timeWindow || 30000,
+        weight: config.weight || 5,
+        extractors: config.extractors || {},
+        validators: config.validators || [],
+      })
+    }
+
+    correlateAll(networkCalls, salesforceLogs) {
+      const correlations = []
+
+      networkCalls.forEach((networkCall) => {
+        const matches = this.findMatches(networkCall, salesforceLogs)
+        correlations.push(...matches)
+      })
+
+      // Sort by confidence score (highest first)
       return correlations.sort((a, b) => b.confidence - a.confidence)
     }
-  
-    calculateCorrelation(networkCall, salesforceLog) {
-      const factors = []
+
+    correlateNetworkCallWithLogs(networkCall, salesforceLogs) {
+      return this.findMatches(networkCall, salesforceLogs)
+    }
+
+    correlateAllData(networkCalls, salesforceLogs) {
+      return this.correlateAll(networkCalls, salesforceLogs)
+    }
+
+    findMatches(networkCall, salesforceLogs) {
+      const matches = []
+
+      for (const [ruleName, rule] of this.correlationRules) {
+        // Check if network call matches rule patterns
+        if (!this.matchesNetworkPatterns(networkCall, rule.networkPatterns)) {
+          continue
+        }
+
+        // Find matching Salesforce logs within time window
+        const candidateLogs = salesforceLogs.filter((log) => {
+          const logTime = new Date(log.StartTime).getTime()
+          const callTime = networkCall.timestamp
+          const timeDiff = Math.abs(logTime - callTime)
+
+          return timeDiff <= rule.timeWindow && this.matchesLogPatterns(log, rule.logPatterns)
+        })
+
+        // Score each candidate
+        candidateLogs.forEach((log) => {
+          const correlation = this.scoreCorrelation(networkCall, log, rule)
+          if (correlation.confidence > 0.3) {
+            // Minimum confidence threshold
+            matches.push(correlation)
+          }
+        })
+      }
+
+      return matches
+    }
+
+    matchesNetworkPatterns(networkCall, patterns) {
+      const searchText = `${networkCall.url} ${JSON.stringify(networkCall.requestBody || {})} ${JSON.stringify(networkCall.response || {})}`
+      return patterns.some((pattern) => pattern.test(searchText))
+    }
+
+    matchesLogPatterns(log, patterns) {
+      const searchText = `${log.body || ""} ${log.parsed?.apexClass || ""} ${JSON.stringify(log.parsed || {})}`
+      return patterns.some((pattern) => pattern.test(searchText))
+    }
+
+    scoreCorrelation(networkCall, salesforceLog, rule) {
       let score = 0
-      const maxScore = 100
-  
-      // 1. Time proximity (0-25 points)
-      const timeDiff = Math.abs(new Date(networkCall.timestamp) - new Date(salesforceLog.StartTime))
-      const timeScore = Math.max(0, 25 - timeDiff / 1000 / 60 / 2) // Decrease over 2 minutes
+      let maxScore = 0
+      const factors = []
+
+      // Base score from rule weight
+      score += rule.weight
+      maxScore += rule.weight
+      factors.push(`rule_weight(${rule.weight})`)
+
+      // Time proximity scoring
+      const logTime = new Date(salesforceLog.StartTime).getTime()
+      const callTime = networkCall.timestamp
+      const timeDiff = Math.abs(logTime - callTime)
+      const timeScore = Math.max(0, 10 - timeDiff / 1000) // 10 points for immediate, 0 for 10+ seconds
       score += timeScore
-      factors.push(`time: ${timeScore.toFixed(1)}`)
-  
-      // 2. URL/Operation matching (0-20 points)
-      const operationScore = this.calculateOperationMatch(networkCall, salesforceLog)
-      score += operationScore
-      factors.push(`operation: ${operationScore}`)
-  
-      // 3. Content keyword matching (0-20 points)
-      const contentScore = this.calculateContentMatch(networkCall, salesforceLog)
-      score += contentScore
-      factors.push(`content: ${contentScore}`)
-  
-      // 4. Error correlation (0-15 points)
-      const errorScore = this.calculateErrorMatch(networkCall, salesforceLog)
-      score += errorScore
-      if (errorScore > 0) factors.push(`error: ${errorScore}`)
-  
-      // 5. ID matching (0-20 points)
-      const idScore = this.calculateIdMatch(networkCall, salesforceLog)
-      score += idScore
-      if (idScore > 0) factors.push(`id: ${idScore}`)
-  
-      const confidence = Math.min(score / maxScore, 1)
-      const type = this.determineCorrelationType(networkCall, salesforceLog)
-  
+      maxScore += 10
+      factors.push(`time_proximity(${timeScore.toFixed(1)})`)
+
+      // Pattern matching scoring
+      const networkText = `${networkCall.url} ${JSON.stringify(networkCall.requestBody || {})}`.toLowerCase()
+      const logText = `${salesforceLog.body || ""} ${JSON.stringify(salesforceLog.parsed || {})}`.toLowerCase()
+
+      let patternScore = 0
+      rule.networkPatterns.forEach((pattern) => {
+        if (pattern.test(networkText)) patternScore += 2
+      })
+      rule.logPatterns.forEach((pattern) => {
+        if (pattern.test(logText)) patternScore += 2
+      })
+
+      score += patternScore
+      maxScore += (rule.networkPatterns.length + rule.logPatterns.length) * 2
+      factors.push(`pattern_match(${patternScore})`)
+
+      // Data correlation scoring
+      let dataScore = 0
+      for (const [key, extractor] of Object.entries(rule.extractors)) {
+        try {
+          const extractedValue = extractor(networkCall)
+          if (extractedValue && logText.includes(extractedValue.toString().toLowerCase())) {
+            dataScore += 5
+            factors.push(`data_match_${key}(5)`)
+          }
+        } catch (e) {
+          // Ignore extraction errors
+        }
+      }
+      score += dataScore
+      maxScore += Object.keys(rule.extractors).length * 5
+
+      // HTTP status correlation
+      if (networkCall.status >= 400 && salesforceLog.parsed?.errors?.length > 0) {
+        score += 3
+        factors.push("error_correlation(3)")
+      }
+      maxScore += 3
+
+      // User correlation (if available)
+      if (salesforceLog.parsed?.userInfo && networkCall.response?.user) {
+        const logUser = salesforceLog.parsed.userInfo.toLowerCase()
+        const callUser = networkCall.response.user.toLowerCase()
+        if (logUser.includes(callUser) || callUser.includes(logUser)) {
+          score += 4
+          factors.push("user_correlation(4)")
+        }
+      }
+      maxScore += 4
+
+      const confidence = maxScore > 0 ? score / maxScore : 0
+
       return {
+        networkCall,
+        salesforceLog,
+        type: rule.name,
         confidence,
         score,
         maxScore,
+        timeDifference: timeDiff,
         factors,
-        type,
-        reasoning: this.generateReasoning(networkCall, salesforceLog, factors),
+        reasoning: this.generateReasoning(rule.name, confidence, factors),
       }
     }
-  
-    calculateOperationMatch(networkCall, salesforceLog) {
-      const url = networkCall.url.toLowerCase()
-      const operation = (salesforceLog.Operation || "").toLowerCase()
-      const request = (salesforceLog.Request || "").toLowerCase()
-  
-      let score = 0
-  
-      // Direct operation matching
-      if (url.includes("payment") && (operation.includes("payment") || request.includes("payment"))) {
-        score += 20
-      } else if (url.includes("checkout") && (operation.includes("checkout") || request.includes("checkout"))) {
-        score += 18
-      } else if (url.includes("cart") && (operation.includes("cart") || request.includes("cart"))) {
-        score += 15
-      } else if (url.includes("inventory") && (operation.includes("inventory") || request.includes("inventory"))) {
-        score += 15
-      } else if (url.includes("tax") && (operation.includes("tax") || request.includes("tax"))) {
-        score += 12
-      }
-  
-      return Math.min(score, 20)
+
+    generateReasoning(ruleName, confidence, factors) {
+      const confidenceLevel = confidence > 0.8 ? "High" : confidence > 0.6 ? "Medium" : "Low"
+      const topFactors = factors.slice(0, 3).join(", ")
+
+      return `${confidenceLevel} confidence ${ruleName} correlation based on ${topFactors}`
     }
-  
-    calculateContentMatch(networkCall, salesforceLog) {
-      const logBody = (salesforceLog.body || "").toLowerCase()
-      const url = networkCall.url.toLowerCase()
-      const requestBody = JSON.stringify(networkCall.requestBody || {}).toLowerCase()
-  
-      let score = 0
-      const keywords = this.extractKeywords(url, requestBody)
-  
-      keywords.forEach((keyword) => {
-        if (logBody.includes(keyword)) {
-          score += 3
+
+    // Utility methods for analysis
+    getCorrelationStats(correlations) {
+      const stats = {
+        total: correlations.length,
+        byType: {},
+        byConfidence: {
+          high: 0,
+          medium: 0,
+          low: 0,
+        },
+      }
+
+      correlations.forEach((corr) => {
+        // Count by type
+        if (!stats.byType[corr.type]) {
+          stats.byType[corr.type] = 0
+        }
+        stats.byType[corr.type]++
+
+        // Count by confidence
+        if (corr.confidence > 0.8) {
+          stats.byConfidence.high++
+        } else if (corr.confidence > 0.6) {
+          stats.byConfidence.medium++
+        } else {
+          stats.byConfidence.low++
         }
       })
-  
-      return Math.min(score, 20)
+
+      return stats
     }
-  
-    calculateErrorMatch(networkCall, salesforceLog) {
-      if (networkCall.status < 400 || !salesforceLog.parsed?.errors?.length) {
-        return 0
-      }
-  
-      const networkErrors = networkCall.response?.errors || []
-      const sfErrors = salesforceLog.parsed.errors || []
-  
-      let score = 0
-  
-      // Basic error presence correlation
-      if (networkErrors.length > 0 && sfErrors.length > 0) {
-        score += 10
-  
-        // Try to match error types/messages
-        networkErrors.forEach((netErr) => {
-          sfErrors.forEach((sfErr) => {
-            const similarity = this.calculateStringSimilarity(netErr.message || netErr.title || "", sfErr.message || "")
-            if (similarity > 0.3) {
-              score += 5
-            }
-          })
-        })
-      }
-  
-      return Math.min(score, 15)
-    }
-  
-    calculateIdMatch(networkCall, salesforceLog) {
-      const logBody = salesforceLog.body || ""
-      let score = 0
-  
-      // Checkout ID matching
-      if (networkCall.checkoutId && logBody.includes(networkCall.checkoutId)) {
-        score += 15
-      }
-  
-      // Webstore ID matching
-      if (networkCall.webstoreId && logBody.includes(networkCall.webstoreId)) {
-        score += 10
-      }
-  
-      // Payment token matching
-      if (networkCall.requestBody) {
-        const paymentToken = this.extractPaymentToken(networkCall.requestBody)
-        if (paymentToken && logBody.includes(paymentToken)) {
-          score += 12
-        }
-      }
-  
-      return Math.min(score, 20)
-    }
-  
-    extractKeywords(url, requestBody) {
-      const keywords = []
-  
-      // Extract from URL
-      const urlParts = url.split("/").filter((part) => part.length > 3)
-      keywords.push(...urlParts)
-  
-      // Extract from request body
-      try {
-        const bodyObj = typeof requestBody === "string" ? JSON.parse(requestBody) : requestBody
-        Object.values(bodyObj).forEach((value) => {
-          if (typeof value === "string" && value.length > 3) {
-            keywords.push(value.toLowerCase())
-          }
-        })
-      } catch (e) {
-        // Ignore parsing errors
-      }
-  
-      return [...new Set(keywords)] // Remove duplicates
-    }
-  
-    calculateStringSimilarity(str1, str2) {
-      if (!str1 || !str2) return 0
-  
-      const longer = str1.length > str2.length ? str1 : str2
-      const shorter = str1.length > str2.length ? str2 : str1
-  
-      if (longer.length === 0) return 1.0
-  
-      const editDistance = this.levenshteinDistance(longer, shorter)
-      return (longer.length - editDistance) / longer.length
-    }
-  
-    levenshteinDistance(str1, str2) {
-      const matrix = []
-  
-      for (let i = 0; i <= str2.length; i++) {
-        matrix[i] = [i]
-      }
-  
-      for (let j = 0; j <= str1.length; j++) {
-        matrix[0][j] = j
-      }
-  
-      for (let i = 1; i <= str2.length; i++) {
-        for (let j = 1; j <= str1.length; j++) {
-          if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-            matrix[i][j] = matrix[i - 1][j - 1]
-          } else {
-            matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
-          }
-        }
-      }
-  
-      return matrix[str2.length][str1.length]
-    }
-  
-    extractPaymentToken(requestBody) {
-      try {
-        const body = typeof requestBody === "string" ? JSON.parse(requestBody) : requestBody
-        return body?.paymentToken || body?.token || body?.paymentMethodId
-      } catch (e) {
-        return null
-      }
-    }
-  
-    determineCorrelationType(networkCall, salesforceLog) {
-      const url = networkCall.url.toLowerCase()
-      const hasErrors = networkCall.status >= 400 || salesforceLog.parsed?.errors?.length > 0
-  
-      if (hasErrors) return "error"
-      if (url.includes("payment")) return "payment"
-      if (url.includes("checkout")) return "checkout"
-      if (url.includes("inventory")) return "inventory"
-      if (url.includes("shipping") || url.includes("delivery")) return "shipping"
-      if (url.includes("tax")) return "tax"
-      return "general"
-    }
-  
-    generateReasoning(networkCall, salesforceLog, factors) {
-      const reasons = []
-  
-      const timeDiff = Math.abs(new Date(networkCall.timestamp) - new Date(salesforceLog.StartTime))
-  
-      reasons.push(`Occurred ${Math.round(timeDiff / 1000)}s apart`)
-  
-      if (factors.some((f) => f.includes("id:"))) {
-        reasons.push("Matching IDs found")
-      }
-  
-      if (factors.some((f) => f.includes("error:"))) {
-        reasons.push("Both contain errors")
-      }
-  
-      if (factors.some((f) => f.includes("operation:"))) {
-        reasons.push("Similar operations detected")
-      }
-  
-      return reasons.join(", ")
-    }
-  
-    // Method to get correlations for a specific network call
-    getCorrelationsForCall(networkCall, allCorrelations) {
-      return allCorrelations.filter((corr) => corr.networkCall.id === networkCall.id)
-    }
-  
-    // Method to get correlations for a specific Salesforce log
-    getCorrelationsForLog(salesforceLog, allCorrelations) {
-      return allCorrelations.filter((corr) => corr.salesforceLog.Id === salesforceLog.Id)
-    }
-  
-    // Export correlations for analysis
+
     exportCorrelations(correlations) {
-      const exportData = {
-        timestamp: new Date().toISOString(),
-        totalCorrelations: correlations.length,
-        confidenceThreshold: this.confidenceThreshold,
-        timeWindow: this.timeWindow,
+      return {
         correlations: correlations.map((corr) => ({
-          confidence: corr.confidence,
-          type: corr.type,
-          reasoning: corr.reasoning,
-          timeDifference: corr.timeDifference,
           networkCall: {
             url: corr.networkCall.url,
             method: corr.networkCall.method,
@@ -310,23 +278,32 @@ class CorrelationEngine {
           },
           salesforceLog: {
             id: corr.salesforceLog.Id,
-            operation: corr.salesforceLog.Operation,
             startTime: corr.salesforceLog.StartTime,
-            duration: corr.salesforceLog.DurationMilliseconds,
+            operation: corr.salesforceLog.Operation,
+            apexClass: corr.salesforceLog.parsed?.apexClass,
+          },
+          correlation: {
+            type: corr.type,
+            confidence: corr.confidence,
+            reasoning: corr.reasoning,
+            factors: corr.factors,
           },
         })),
+        stats: this.getCorrelationStats(correlations),
+        exportTime: new Date().toISOString(),
       }
-  
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `sfcc-correlations-${Date.now()}.json`
-      a.click()
-      URL.revokeObjectURL(url)
     }
   }
-  
-  // Export for use in other scripts
+
+  // Export for use in content script
   window.CorrelationEngine = CorrelationEngine
-  
+
+  console.log("✅ CorrelationEngine class defined and available on window object")
+
+  // Dispatch a custom event to signal the class is ready
+  window.dispatchEvent(
+    new CustomEvent("CorrelationEngineReady", {
+      detail: { CorrelationEngine },
+    }),
+  )
+})()

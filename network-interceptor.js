@@ -1,48 +1,202 @@
-// Network interceptor script - injected into page context
+// Network interceptor to capture fetch and XMLHttpRequest calls
 ;(() => {
-    console.log("SFCC Network Interceptor injected")
-  
-    // Store original functions
-    const originalXHR = window.XMLHttpRequest
-    const originalFetch = window.fetch
-  
-    // Helper function to check if URL is SFCC checkout related
-    function isSFCCCheckoutCall(url) {
-      const patterns = [
-        "/webruntime/api/services/data/",
-        "/commerce/webstores/",
-        "/checkouts/",
-        "/payments",
-        "/shipping-address",
-        "/billing-address",
-        "/delivery-methods",
-        "/taxes",
-        "/inventory",
-        "/cart-items",
-        "/place-order",
-        "/guest-checkout",
-        "/inventory-reservations", // Add this new pattern
-        // Add more patterns for broader coverage
-        "/api/",
-        "/services/",
-        "salesforce.com",
-        "force.com",
-      ]
-      return patterns.some((pattern) => url.toLowerCase().includes(pattern.toLowerCase()))
-    }
-  
-    // Helper function to parse response
-    function parseResponse(responseText) {
-      try {
-        return JSON.parse(responseText)
-      } catch (e) {
-        return responseText
+  console.log("🔧 Loading network interceptor...")
+
+  // Store original functions
+  const originalFetch = window.fetch
+  const originalXHROpen = XMLHttpRequest.prototype.open
+  const originalXHRSend = XMLHttpRequest.prototype.send
+
+  // Helper function to extract meaningful URL name
+  function extractUrlName(url) {
+    try {
+      const urlObj = new URL(url)
+      const pathname = urlObj.pathname
+      const search = urlObj.search
+
+      // Extract the last meaningful segment from the path
+      const pathSegments = pathname.split("/").filter((segment) => segment.length > 0)
+      let lastSegment = pathSegments[pathSegments.length - 1]
+
+      // Handle special cases
+      if (lastSegment === "active" && pathSegments.length > 1) {
+        // For /checkouts/active, show "checkouts/active"
+        lastSegment = pathSegments[pathSegments.length - 2] + "/" + lastSegment
+      } else if (lastSegment && lastSegment.length > 20) {
+        // If the last segment is very long (like an ID), use the previous segment
+        const prevSegment = pathSegments[pathSegments.length - 2]
+        if (prevSegment && prevSegment.length < 20) {
+          lastSegment = prevSegment
+        }
       }
+
+      // Always include query parameters if they exist
+      return lastSegment + search
+    } catch (error) {
+      console.warn("Failed to extract URL name:", error)
+      return url
     }
-  
-    // Helper function to send data to content script
-    function sendToContentScript(callData) {
+  }
+
+  // Helper function to safely stringify data
+  function safeStringify(data) {
+    try {
+      if (typeof data === "string") return data
+      return JSON.stringify(data)
+    } catch (error) {
+      return String(data)
+    }
+  }
+
+  // Helper function to safely parse JSON
+  function safeParse(data) {
+    try {
+      if (typeof data === "string") {
+        return JSON.parse(data)
+      }
+      return data
+    } catch (error) {
+      return data
+    }
+  }
+
+  // Intercept fetch
+  window.fetch = async function (...args) {
+    const startTime = performance.now()
+    const [resource, options = {}] = args
+
+    const url = typeof resource === "string" ? resource : resource.url
+    const method = options.method || "GET"
+    const requestHeaders = options.headers || {}
+    const requestBody = options.body
+
+    // Parse request body if it's a string
+    let parsedRequestBody = null
+    if (requestBody) {
+      parsedRequestBody = safeParse(requestBody)
+    }
+
+    try {
+      const response = await originalFetch.apply(this, args)
+      const endTime = performance.now()
+      const duration = Math.round(endTime - startTime)
+
+      // Clone response to read body without consuming it
+      const responseClone = response.clone()
+      let responseData = null
+
       try {
+        const responseText = await responseClone.text()
+        responseData = responseText ? safeParse(responseText) : null
+      } catch (error) {
+        console.warn("Failed to read response body:", error)
+      }
+
+      // Create call data object
+      const callData = {
+        url: url,
+        urlName: extractUrlName(url),
+        method: method,
+        status: response.status,
+        duration: duration,
+        timestamp: Date.now(),
+        requestHeaders: requestHeaders,
+        requestBody: parsedRequestBody,
+        responseBody: responseData,
+        response: responseData, // Keep both for backward compatibility
+      }
+
+      // Send to content script
+      window.postMessage(
+        {
+          type: "SFCC_NETWORK_CALL",
+          callData: callData,
+        },
+        "*",
+      )
+
+      return response
+    } catch (error) {
+      const endTime = performance.now()
+      const duration = Math.round(endTime - startTime)
+
+      // Create error call data
+      const callData = {
+        url: url,
+        urlName: extractUrlName(url),
+        method: method,
+        status: 0,
+        duration: duration,
+        timestamp: Date.now(),
+        requestHeaders: requestHeaders,
+        requestBody: parsedRequestBody,
+        responseBody: null,
+        response: null,
+        error: error.message,
+      }
+
+      // Send to content script
+      window.postMessage(
+        {
+          type: "SFCC_NETWORK_CALL",
+          callData: callData,
+        },
+        "*",
+      )
+
+      throw error
+    }
+  }
+
+  // Intercept XMLHttpRequest
+  XMLHttpRequest.prototype.open = function (method, url, ...args) {
+    this._sfccMethod = method
+    this._sfccUrl = url
+    this._sfccStartTime = performance.now()
+    return originalXHROpen.call(this, method, url, ...args)
+  }
+
+  XMLHttpRequest.prototype.send = function (body) {
+    
+    let parsedRequestBody = null
+
+    if (body) {
+      parsedRequestBody = safeParse(body)
+    }
+
+    // Store request data
+    this._sfccRequestBody = parsedRequestBody
+
+    // Override onreadystatechange to capture response
+    const originalOnReadyStateChange = this.onreadystatechange
+
+    this.onreadystatechange = () => {
+      if (this.readyState === 4) {
+        const endTime = performance.now()
+        const duration = Math.round(endTime - this._sfccStartTime)
+
+        let responseData = null
+        try {
+          responseData = this.responseText ? safeParse(this.responseText) : null
+        } catch (error) {
+          console.warn("Failed to parse XHR response:", error)
+        }
+
+        // Create call data object
+        const callData = {
+          url: this._sfccUrl,
+          urlName: extractUrlName(this._sfccUrl),
+          method: this._sfccMethod,
+          status: this.status,
+          duration: duration,
+          timestamp: Date.now(),
+          requestHeaders: {}, // XHR headers are harder to capture
+          requestBody: this._sfccRequestBody,
+          responseBody: responseData,
+          response: responseData, // Keep both for backward compatibility
+        }
+
+        // Send to content script
         window.postMessage(
           {
             type: "SFCC_NETWORK_CALL",
@@ -50,226 +204,16 @@
           },
           "*",
         )
-      } catch (error) {
-        console.error("Error sending to content script:", error)
+      }
+
+      // Call original handler if it exists
+      if (originalOnReadyStateChange) {
+        originalOnReadyStateChange.call(this)
       }
     }
-  
-    // Override XMLHttpRequest
-    window.XMLHttpRequest = () => {
-      const xhr = new originalXHR()
-      const originalOpen = xhr.open
-      const originalSend = xhr.send
-  
-      const requestData = {}
-  
-      xhr.open = function (method, url, async, user, password) {
-        requestData.method = method
-        requestData.url = url
-        requestData.startTime = Date.now()
-  
-        if (isSFCCCheckoutCall(url)) {
-          console.log("XHR Open (SFCC):", method, url)
-        }
-  
-        return originalOpen.apply(this, arguments)
-      }
-  
-      xhr.send = function (data) {
-        requestData.requestBody = data
-  
-        // Store original handlers
-        const originalOnReadyStateChange = xhr.onreadystatechange
-        const originalOnLoad = xhr.onload
-        const originalOnError = xhr.onerror
-  
-        // Override onreadystatechange
-        xhr.onreadystatechange = function () {
-          if (xhr.readyState === 4 && isSFCCCheckoutCall(requestData.url)) {
-            const callData = {
-              ...requestData,
-              status: xhr.status,
-              statusText: xhr.statusText,
-              response: parseResponse(xhr.responseText),
-              duration: Date.now() - requestData.startTime,
-              timestamp: Date.now(),
-              type: "xhr",
-            }
-  
-            console.log("SFCC XHR Call captured:", callData)
-            sendToContentScript(callData)
-          }
-  
-          if (originalOnReadyStateChange) {
-            originalOnReadyStateChange.apply(this, arguments)
-          }
-        }
-  
-        // Override onload as backup
-        xhr.onload = function () {
-          if (isSFCCCheckoutCall(requestData.url)) {
-            const callData = {
-              ...requestData,
-              status: xhr.status,
-              statusText: xhr.statusText,
-              response: parseResponse(xhr.responseText),
-              duration: Date.now() - requestData.startTime,
-              timestamp: Date.now(),
-              type: "xhr",
-            }
-  
-            console.log("SFCC XHR Call captured (onload):", callData)
-            sendToContentScript(callData)
-          }
-  
-          if (originalOnLoad) {
-            originalOnLoad.apply(this, arguments)
-          }
-        }
-  
-        // Override onerror
-        xhr.onerror = function () {
-          if (isSFCCCheckoutCall(requestData.url)) {
-            const callData = {
-              ...requestData,
-              status: xhr.status || 0,
-              statusText: xhr.statusText || "Network Error",
-              response: { error: "Network request failed" },
-              duration: Date.now() - requestData.startTime,
-              timestamp: Date.now(),
-              type: "xhr",
-            }
-  
-            console.log("SFCC XHR Error captured:", callData)
-            sendToContentScript(callData)
-          }
-  
-          if (originalOnError) {
-            originalOnError.apply(this, arguments)
-          }
-        }
-  
-        return originalSend.apply(this, arguments)
-      }
-  
-      return xhr
-    }
-  
-    // Override fetch
-    window.fetch = function (input, init) {
-      const url = typeof input === "string" ? input : input.url
-      const method = init?.method || "GET"
-      const startTime = Date.now()
-  
-      if (isSFCCCheckoutCall(url)) {
-        console.log("Fetch called (SFCC):", method, url)
-      }
-  
-      return originalFetch
-        .apply(this, arguments)
-        .then((response) => {
-          if (isSFCCCheckoutCall(url)) {
-            // Clone response to read it without consuming the original
-            const responseClone = response.clone()
-  
-            responseClone
-              .text()
-              .then((responseText) => {
-                const callData = {
-                  method,
-                  url,
-                  status: response.status,
-                  statusText: response.statusText,
-                  response: parseResponse(responseText),
-                  requestBody: init?.body,
-                  duration: Date.now() - startTime,
-                  timestamp: Date.now(),
-                  type: "fetch",
-                }
-  
-                console.log("SFCC Fetch Call captured:", callData)
-                sendToContentScript(callData)
-              })
-              .catch((err) => {
-                console.error("Error reading fetch response:", err)
-  
-                // Send basic call data even if we can't read response
-                const callData = {
-                  method,
-                  url,
-                  status: response.status,
-                  statusText: response.statusText,
-                  response: { error: "Could not read response" },
-                  requestBody: init?.body,
-                  duration: Date.now() - startTime,
-                  timestamp: Date.now(),
-                  type: "fetch",
-                }
-  
-                sendToContentScript(callData)
-              })
-          }
-  
-          return response
-        })
-        .catch((error) => {
-          if (isSFCCCheckoutCall(url)) {
-            const callData = {
-              method,
-              url,
-              status: 0,
-              statusText: "Network Error",
-              response: { error: error.message },
-              requestBody: init?.body,
-              duration: Date.now() - startTime,
-              timestamp: Date.now(),
-              type: "fetch",
-            }
-  
-            console.log("SFCC Fetch Error captured:", callData)
-            sendToContentScript(callData)
-          }
-  
-          throw error
-        })
-    }
-  
-    // Also monitor any existing network activity by checking for common SFCC objects
-    function checkExistingActivity() {
-      // Look for common SFCC/Commerce objects in window
-      const sfccObjects = ["sfcc", "commerce", "checkout", "cart"]
-      const foundObjects = []
-  
-      sfccObjects.forEach((obj) => {
-        if (window[obj]) {
-          foundObjects.push(obj)
-        }
-      })
-  
-      if (foundObjects.length > 0) {
-        console.log("Found SFCC objects:", foundObjects)
-  
-        // Send notification about detected SFCC environment
-        sendToContentScript({
-          method: "INFO",
-          url: window.location.href,
-          status: 200,
-          statusText: "SFCC Environment Detected",
-          response: {
-            detectedObjects: foundObjects,
-            userAgent: navigator.userAgent,
-            timestamp: Date.now(),
-          },
-          duration: 0,
-          timestamp: Date.now(),
-          type: "environment",
-        })
-      }
-    }
-  
-    // Check for existing activity after a short delay
-    setTimeout(checkExistingActivity, 1000)
-  
-    console.log("Network interception setup complete")
-  })()
-  
+
+    return originalXHRSend.call(this, body)
+  }
+
+  console.log("✅ Network interceptor loaded")
+})()

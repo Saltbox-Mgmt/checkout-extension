@@ -2,12 +2,11 @@
   "manifest_version": 3,
   "name": "SFCC Checkout Debugger",
   "version": "1.0.0",
-  "description": "Debug Salesforce Commerce Cloud checkout issues by monitoring network calls and checkout lifecycle with Salesforce log integration",
-  "permissions": ["activeTab", "storage", "debugger", "webRequest"],
+  "description": "Debug Salesforce Commerce Cloud checkout flows with network monitoring and log correlation",
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "webRequest", "webNavigation"],
   "host_permissions": [
     "https://*.force.com/*",
     "https://*.salesforce.com/*",
-    "https://*.my.salesforce.com/*",
     "https://*.experience.salesforce.com/*",
     "https://*.site.com/*",
     "https://*.siteforce.com/*"
@@ -20,40 +19,46 @@
       "matches": [
         "https://*.force.com/*",
         "https://*.salesforce.com/*",
-        "https://*.my.salesforce.com/*",
         "https://*.experience.salesforce.com/*",
         "https://*.site.com/*",
         "https://*.siteforce.com/*"
       ],
-      "js": ["content.js"],
-      "css": ["sidepanel.css"],
+      "js": [
+        "content.js", 
+        "session-manager.js", 
+        "correlation-engine.js", 
+        "checkout-call-analyzer.js", 
+        "salesforce-api.js",
+        "salesforce-logger.js",
+        "network-interceptor.js"
+      ],
       "run_at": "document_start"
     }
   ],
+  "devtools_page": "devtools.html",
   "action": {
     "default_popup": "popup.html",
     "default_title": "SFCC Checkout Debugger"
   },
-  "devtools_page": "devtools.html",
   "web_accessible_resources": [
     {
       "resources": [
-        "injected.js",
-        "sidepanel.css",
         "network-interceptor.js",
-        "salesforce-api.js",
         "correlation-engine.js",
         "checkout-call-analyzer.js",
-        "test-salesforce-integration.js",
-        "test-interface.html"
+        "commerce-analyzer.js",
+        "salesforce-api.js",
+        "salesforce-logger.js",
+        "injected.js",
+        "session-manager.js"
       ],
       "matches": [
         "https://*.force.com/*",
         "https://*.salesforce.com/*",
-        "https://*.my.salesforce.com/*",
         "https://*.experience.salesforce.com/*",
         "https://*.site.com/*",
-        "https://*.siteforce.com/*"
+        "https://*.siteforce.com/*",
+        "<all_urls>"
       ]
     }
   ]
