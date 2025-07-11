@@ -3,7 +3,7 @@
   "name": "SFCC Checkout Debugger",
   "version": "1.0.0",
   "description": "Debug Salesforce Commerce Cloud checkout flows with network monitoring and log correlation",
-  "permissions": ["storage", "activeTab", "scripting", "tabs", "webRequest", "webNavigation"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "webRequest", "webNavigation", "cookies"],
   "host_permissions": [
     "https://*.force.com/*",
     "https://*.salesforce.com/*",

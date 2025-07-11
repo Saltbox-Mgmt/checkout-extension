@@ -1,12 +1,10 @@
 // Correlation engine for matching network calls with Salesforce logs
 ;(() => {
-  console.log("🔧 Loading CorrelationEngine...")
 
   class CorrelationEngine {
     constructor() {
       this.correlationRules = new Map()
       this.initializeDefaultRules()
-      console.log("✅ CorrelationEngine initialized with", this.correlationRules.size, "rules")
     }
 
     initializeDefaultRules() {
@@ -297,8 +295,6 @@
 
   // Export for use in content script
   window.CorrelationEngine = CorrelationEngine
-
-  console.log("✅ CorrelationEngine class defined and available on window object")
 
   // Dispatch a custom event to signal the class is ready
   window.dispatchEvent(

@@ -1,12 +1,10 @@
 // Enhanced checkout call analyzer with flexible configuration
 ;(() => {
-  console.log("🔧 Loading CheckoutCallAnalyzer...")
 
   class CheckoutCallAnalyzer {
     constructor() {
       this.callTypes = new Map()
       this.initializeDefaultTypes()
-      console.log("✅ CheckoutCallAnalyzer initialized with", this.callTypes.size, "call types")
     }
 
     // Replace the initializeDefaultTypes method with this enhanced version
@@ -182,7 +180,6 @@
           // This will match any /active call and then we'll determine the specific type in extractors
           (call) => {
             const hasActiveUrl = this.hasUrlPath(call, "/active")
-            console.log("🔍 Active URL check:", hasActiveUrl, "for URL:", call.url)
             return hasActiveUrl
           },
         ],
@@ -215,7 +212,6 @@
         priority: 30, // HIGHEST priority to catch /active calls before any other patterns
       })
 
-      console.log("✅ Initialized call types:", Array.from(this.callTypes.keys()))
     }
 
     // Add a new call type configuration
@@ -234,7 +230,6 @@
 
     // Analyze a network call and enhance it with extracted data
     analyzeCall(callData) {
-      console.log("🔍 Analyzing call:", callData.method, callData.url.split("/").pop())
 
       const enhancedCall = { ...callData }
       const matchedTypes = []
@@ -243,7 +238,6 @@
       for (const [typeName, typeConfig] of this.callTypes) {
         if (this.matchesCallType(callData, typeConfig)) {
           matchedTypes.push({ name: typeName, config: typeConfig })
-          console.log(`✅ Matched type: ${typeName} (priority: ${typeConfig.priority})`)
         }
       }
 
@@ -256,7 +250,6 @@
         enhancedCall.callType = primaryMatch.name
         enhancedCall.checkoutStage = primaryMatch.config.stage
 
-        console.log(`🎯 Primary match: ${primaryMatch.name} (stage: ${primaryMatch.config.stage})`)
 
         // Apply all extractors
         for (const [extractorName, extractorFn] of Object.entries(primaryMatch.config.extractors)) {
@@ -264,7 +257,6 @@
             const extractedValue = extractorFn(callData)
             if (extractedValue !== null && extractedValue !== undefined) {
               enhancedCall[extractorName] = extractedValue
-              console.log(`📊 Extracted ${extractorName}:`, extractedValue)
             }
           } catch (error) {
             console.warn(`Error in ${primaryMatch.name}.${extractorName} extractor:`, error)
@@ -280,14 +272,8 @@
           }
         }
 
-        console.log(`✅ Analyzed ${primaryMatch.name} call:`, {
-          url: callData.url.split("/").pop(),
-          stage: enhancedCall.checkoutStage,
-          successful: enhancedCall.isSuccessful,
-          updateType: enhancedCall.updateType,
-        })
       } else {
-        console.log(`❓ No matches found for:`, callData.method, callData.url)
+        //console.log(`❓ No matches found for:`, callData.method, callData.url)
       }
 
       return enhancedCall
@@ -298,23 +284,17 @@
       const url = callData.url.toLowerCase()
       const method = callData.method.toUpperCase()
 
-      console.log(`🔍 Checking ${typeConfig.name}:`, {
-        url: url.split("/").pop(),
-        method,
-        urlPatterns: typeConfig.urlPatterns,
-        methods: typeConfig.methods,
-      })
 
       // Check URL patterns
       const urlMatches = typeConfig.urlPatterns.some((pattern) => {
         const matches = url.includes(pattern.toLowerCase())
-        if (matches) console.log(`✅ URL pattern matched: ${pattern}`)
+        
         return matches
       })
 
       // Check HTTP methods
       const methodMatches = typeConfig.methods.includes(method)
-      if (methodMatches) console.log(`✅ Method matched: ${method}`)
+      
 
       // Check payload matchers if URL and method match, or if we have payload-only matchers
       let payloadMatches = true
@@ -322,7 +302,7 @@
         payloadMatches = typeConfig.payloadMatchers.some((matcher) => {
           try {
             const result = matcher(callData)
-            if (result) console.log(`✅ Payload matcher succeeded for ${typeConfig.name}`)
+            
             return result
           } catch (error) {
             console.warn(`Payload matcher error for ${typeConfig.name}:`, error)
@@ -337,7 +317,7 @@
         (urlMatches && methodMatches && payloadMatches) ||
         (typeConfig.payloadMatchers && payloadMatches && methodMatches)
 
-      console.log(`🎯 Final match result for ${typeConfig.name}:`, finalMatch)
+      
       return finalMatch
     }
 
@@ -372,7 +352,7 @@
             // Check for checkout ID in string format - only checkoutId
             const stringMatch = requestBody.match(/(?:checkoutId)["':\s]*([a-zA-Z0-9]{15,18})/)
             if (stringMatch) {
-              console.log("✅ Found checkout ID in request body string:", stringMatch[1])
+              
               return stringMatch[1]
             }
           }
@@ -380,7 +360,7 @@
 
         if (parsedBody && typeof parsedBody === "object") {
           if (parsedBody.checkoutId) {
-            console.log("✅ Found checkout ID in request.checkoutId:", parsedBody.checkoutId)
+            
             return parsedBody.checkoutId
           }
           // Remove cartId and generic id checks - only look for explicit checkoutId
@@ -476,7 +456,6 @@
 
         case "activeCheckout":
           const updateType = analyzedCall.updateType
-          console.log("🔄 Processing activeCheckout update:", updateType)
 
           if (
             updateType.includes("delivery-address") ||
@@ -512,7 +491,7 @@
 
           // Store the specific update type for debugging
           updated.lastActiveUpdateType = updateType
-          console.log("✅ Updated checkout data for activeCheckout:", updated)
+          
           break
       }
 
@@ -536,7 +515,7 @@
 
     hasUrlPath(call, path) {
       const result = call.url.toLowerCase().includes(path.toLowerCase())
-      console.log(`🔍 URL path check: "${path}" in "${call.url}" = ${result}`)
+      
       return result
     }
 
@@ -624,7 +603,7 @@
     determineActiveUpdateType(call) {
       const body = this.parseRequestBody(call.requestBody)
       if (!body) {
-        console.log("❌ No request body found for /active call")
+        
         return "unknown"
       }
 
@@ -633,48 +612,45 @@
       // Check for delivery address updates
       if (body.deliveryAddress || body.desiredDeliveryDate || body.shippingInstructions) {
         if (body.deliveryAddress && body.desiredDeliveryDate) {
-          console.log("✅ Detected: delivery-address-with-date")
+          
           return "delivery-address-with-date"
         } else if (body.deliveryAddress) {
-          console.log("✅ Detected: delivery-address")
+          
           return "delivery-address"
         } else if (body.desiredDeliveryDate) {
-          console.log("✅ Detected: delivery-date")
+          
           return "delivery-date"
         } else if (body.shippingInstructions) {
-          console.log("✅ Detected: shipping-instructions")
+          
           return "shipping-instructions"
         }
       }
 
       // Check for delivery method updates
       if (body.deliveryMethodId) {
-        console.log("✅ Detected: delivery-method")
+        
         return "delivery-method"
       }
 
       // Check for contact info updates
       if (body.contactInfo) {
-        console.log("✅ Detected: contact-info")
+        
         return "contact-info"
       }
 
       // Check for payment updates
       if (body.paymentDetails || body.paymentMethodId || body.billingAddress) {
-        console.log("✅ Detected: payment-info")
+        
         return "payment-info"
       }
 
-      console.log("❓ Unknown /active update type")
+      
       return "unknown"
     }
   }
 
   // Export for use in content script - make sure it's available immediately
   window.CheckoutCallAnalyzer = CheckoutCallAnalyzer
-
-  // Also log that it's available
-  console.log("✅ CheckoutCallAnalyzer class defined and available on window object")
 
   // Dispatch a custom event to signal the class is ready
   window.dispatchEvent(

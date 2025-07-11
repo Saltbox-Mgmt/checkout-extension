@@ -1,6 +1,5 @@
 // Dedicated Salesforce logging and correlation service
 ;(() => {
-    console.log("🔧 Loading SalesforceLogger...")
   
     class SalesforceLogger {
       constructor() {
@@ -13,13 +12,11 @@
         this.lastSync = null
         this.syncInProgress = false
   
-        console.log("✅ SalesforceLogger initialized")
       }
   
       // Connection management
       async connect(instanceUrl, sessionId) {
         try {
-          console.log("🔗 Connecting to Salesforce...")
   
           this.baseUrl = instanceUrl.endsWith("/") ? instanceUrl.slice(0, -1) : instanceUrl
           this.sessionId = sessionId
@@ -40,7 +37,6 @@
           }
   
           this.isConnected = true
-          console.log("✅ Connected to Salesforce successfully")
           return { success: true }
         } catch (error) {
           console.error("❌ Salesforce connection failed:", error)
@@ -55,7 +51,6 @@
         this.isConnected = false
         this.orgId = null
         this.logs = []
-        console.log("🔌 Disconnected from Salesforce")
       }
   
       // API request wrapper
@@ -97,7 +92,6 @@
       // Main log retrieval method
       async syncLogs(options = {}) {
         if (this.syncInProgress) {
-          console.log("⏳ Sync already in progress, skipping...")
           return { success: false, message: "Sync already in progress" }
         }
   
@@ -108,7 +102,6 @@
   
         try {
           this.syncInProgress = true
-          console.log("🔄 Starting Salesforce log sync...")
   
           const {
             startTime = new Date(Date.now() - 60 * 60 * 1000), // Last hour
@@ -125,8 +118,7 @@
           // Store results
           this.logs = processedLogs
           this.lastSync = Date.now()
-  
-          console.log(`✅ Sync completed: ${processedLogs.length} logs retrieved`)
+
   
           return {
             success: true,
@@ -175,8 +167,7 @@
       async processLogs(logs) {
         const processedLogs = []
         const logsToProcess = logs.slice(0, Math.min(20, logs.length)) // Limit processing
-  
-        console.log(`🔍 Processing ${logsToProcess.length} logs...`)
+
   
         for (const log of logsToProcess) {
           try {
@@ -359,9 +350,7 @@
         }
   
         try {
-          console.log("🧪 Testing Salesforce connection...")
           await this.makeRequest("/services/data/v58.0/limits")
-          console.log("✅ Connection test successful")
           return { success: true, message: "Connection is active" }
         } catch (error) {
           console.error("❌ Connection test failed:", error)
@@ -383,7 +372,6 @@
       clearLogs() {
         this.logs = []
         this.lastSync = null
-        console.log("🗑️ Salesforce logs cleared")
       }
   
       // Get connection status
@@ -456,8 +444,6 @@
   
     // Make available globally
     window.SalesforceLogger = SalesforceLogger
-  
-    console.log("✅ SalesforceLogger class loaded and available")
   
     // Dispatch a custom event to signal the class is ready
     window.dispatchEvent(

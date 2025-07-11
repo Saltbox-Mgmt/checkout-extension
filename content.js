@@ -116,8 +116,6 @@ class SFCCMonitor {
   }
 
   async initializeComponents() {
-    console.log("🔄 Initializing components with event-based loading...")
-
     // Set up event listeners for component ready events
     const componentPromises = [
       this.waitForComponentEvent("CheckoutCallAnalyzerReady", "analyzer"),
@@ -149,37 +147,34 @@ class SFCCMonitor {
 
       if (result.status === "fulfilled") {
         this.componentsLoaded[componentName] = true
-        console.log(`✅ ${componentName} loaded successfully`)
+        //console.log(`✅ ${componentName} loaded successfully`)
       } else {
         console.warn(`⚠️ ${componentName} failed to load:`, result.reason?.message)
         this.componentsLoaded[componentName] = false
       }
     })
 
-    console.log("📊 Component loading summary:", this.componentsLoaded)
-
     // Additional check for SessionManager availability
     this.checkSessionManagerAvailability()
 
     // Final fallback check after a delay
     setTimeout(() => {
-      console.log("🔍 Final component check...")
 
       // Check SessionManager one more time
       if (!this.sessionManager && window.SessionManager) {
-        console.log("🔧 Final SessionManager assignment")
+        //console.log("🔧 Final SessionManager assignment")
         this.sessionManager = window.SessionManager
         this.componentsLoaded.sessionManager = true
         this.updatePanelContent()
       }
 
-      console.log("📊 Final component status:", {
+      /* console.log("📊 Final component status:", {
         analyzer: !!this.analyzer,
         correlationEngine: !!this.correlationEngine,
         salesforceLogger: !!this.salesforceLogger,
         sessionManager: !!this.sessionManager,
         windowSessionManager: !!window.SessionManager,
-      })
+      }) */
     }, 3000)
 
     // Force update panel content after components load
@@ -189,15 +184,12 @@ class SFCCMonitor {
   }
 
   checkSessionManagerAvailability() {
-    console.log("🔍 Checking SessionManager availability...")
 
     // Check if SessionManager is available even if event didn't fire
     if (window.SessionManager && typeof window.SessionManager === "object") {
-      console.log("🔍 SessionManager found directly on window object")
+      //console.log("🔍 SessionManager found directly on window object")
       this.sessionManager = window.SessionManager
       this.componentsLoaded.sessionManager = true
-      console.log("✅ SessionManager assigned directly:", !!this.sessionManager)
-      console.log("🔧 SessionManager methods available:", Object.keys(this.sessionManager))
 
       // Verify required methods exist
       const requiredMethods = [
@@ -220,12 +212,6 @@ class SFCCMonitor {
 
       return true
     } else {
-      console.log("❌ SessionManager not found on window object")
-      console.log("🔍 window.SessionManager type:", typeof window.SessionManager)
-      console.log("🔍 window.SessionManager value:", window.SessionManager)
-
-      // Try to manually load and execute the SessionManager script
-      console.log("🔄 Attempting to manually load SessionManager...")
       this.forceLoadSessionManager()
 
       return false
@@ -233,8 +219,6 @@ class SFCCMonitor {
   }
 
   forceLoadSessionManager() {
-    console.log("🔧 Force loading SessionManager...")
-
     // Try to load the script again
     if (this.isContextValid()) {
       try {
@@ -242,12 +226,10 @@ class SFCCMonitor {
         script.src = window.chrome.runtime.getURL("session-manager.js")
 
         script.onload = () => {
-          console.log("✅ SessionManager script force-loaded")
 
           // Check again after a short delay
           setTimeout(() => {
             if (window.SessionManager && typeof window.SessionManager === "object") {
-              console.log("🎉 SessionManager now available after force load!")
               this.sessionManager = window.SessionManager
               this.componentsLoaded.sessionManager = true
               this.updatePanelContent()
@@ -279,7 +261,6 @@ class SFCCMonitor {
       }, 8000)
 
       const handler = (event) => {
-        console.log(`🎉 Received ${eventName} event`)
         clearTimeout(timeout)
         window.removeEventListener(eventName, handler)
 
@@ -298,7 +279,6 @@ class SFCCMonitor {
             case "sessionManager":
               // For the object-based SessionManager, just reference it directly
               this.sessionManager = window.SessionManager
-              console.log("✅ SessionManager object assigned via event:", !!this.sessionManager)
               break
           }
           resolve(true)
@@ -320,7 +300,6 @@ class SFCCMonitor {
       script.src = window.chrome.runtime.getURL(filename)
 
       script.onload = () => {
-        console.log(`✅ ${filename} script loaded`)
 
         // Special handling for session-manager.js
         if (filename === "session-manager.js") {
@@ -368,6 +347,9 @@ class SFCCMonitor {
           sessionManagerType: typeof this.sessionManager,
           windowSessionManager: typeof window.SessionManager,
         })
+      } else if (message.action === "openSidePanelManually") {
+        this.openSidePanelManually()
+        sendResponse({ success: true })
       }
     } catch (error) {
       console.error("Error handling message:", error)
@@ -380,7 +362,6 @@ class SFCCMonitor {
     const urlObserver = new MutationObserver(() => {
       if (window.location.href !== currentUrl) {
         currentUrl = window.location.href
-        console.log("URL changed to:", currentUrl)
         this.handleUrlChange()
       }
     })
@@ -424,7 +405,6 @@ class SFCCMonitor {
   }
 
   handleUrlChange() {
-    console.log("Handling URL change:", window.location.href)
 
     const shouldShowTab = this.isCheckoutPage()
     const tab = document.getElementById("sfcc-debugger-tab")
@@ -432,13 +412,11 @@ class SFCCMonitor {
 
     if (shouldShowTab && !tab) {
       // We're on a checkout page but tab doesn't exist - inject it
-      console.log("Injecting side panel for checkout page")
       this.injectSidePanel()
       this.injectNetworkInterceptor()
       this.startMonitoring()
     } else if (!shouldShowTab && tab) {
       // We're not on a checkout page but tab exists - remove it
-      console.log("Removing side panel - not a checkout page")
       if (tab) tab.remove()
       if (panel) panel.remove()
       this.stopMonitoring()
@@ -503,12 +481,12 @@ class SFCCMonitor {
     // Show only on SFCC domains with /checkout in path and not excluded
     const shouldShow = this.isSFCCDomain() && isCheckoutPage && !isExcluded
 
-    console.log("Checkout page check:", {
+    /* console.log("Checkout page check:", {
       path,
       isCheckoutPage,
       isExcluded,
       shouldShow,
-    })
+    }) */
 
     return shouldShow
   }
@@ -532,7 +510,6 @@ class SFCCMonitor {
       const script = document.createElement("script")
       script.src = window.chrome.runtime.getURL("network-interceptor.js")
       script.onload = () => {
-        console.log("Network interceptor script loaded")
         script.remove() // Clean up after loading
       }
       script.onerror = (error) => {
@@ -543,7 +520,6 @@ class SFCCMonitor {
       const head = document.head || document.getElementsByTagName("head")[0] || document.documentElement
       head.insertBefore(script, head.firstChild)
 
-      console.log("Network interceptor script injection initiated")
     } catch (error) {
       console.error("Failed to inject network interceptor:", error)
     }
@@ -631,7 +607,6 @@ vertical-align: baseline !important;
       // Add event listeners
       this.setupPanelEventListeners()
 
-      console.log("SFCC Debugger side panel injected")
     } catch (error) {
       console.error("Failed to inject side panel:", error)
     }
@@ -768,7 +743,7 @@ vertical-align: baseline !important;
             this.safeSetTextContent(accountSyncEl, "Never")
           }
 
-          console.log("✅ Updated active account display:", activeAccount.name, instanceType)
+          //console.log("✅ Updated active account display:", activeAccount.name, instanceType)
         } else {
           // Hide section if no active account found
           activeAccountSection.style.display = "none"
@@ -1193,7 +1168,7 @@ vertical-align: baseline !important;
       this.activeFilter = filterKey
     }
 
-    console.log("Filter toggled:", this.activeFilter)
+    //console.log("Filter toggled:", this.activeFilter)
 
     // Re-render requirements to update visual state
     this.renderRequirements()
@@ -1304,20 +1279,6 @@ vertical-align: baseline !important;
 
         // Get analysis from analyzer if available
         let analysisInfo = ""
-        if (this.analyzer && call.analysis) {
-          analysisInfo = `
-        <div style="margin-bottom: 12px;">
-          <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Analysis</div>
-          <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd;">
-            <div><strong>Category:</strong> ${call.analysis.category}</div>
-            <div><strong>Type:</strong> ${call.analysis.type}</div>
-            <div><strong>Confidence:</strong> ${(call.analysis.confidence * 100).toFixed(0)}%</div>
-            ${call.analysis.checkoutId ? `<div><strong>Checkout ID:</strong> ${call.analysis.checkoutId}</div>` : ""}
-            ${call.analysis.errors?.length > 0 ? `<div><strong>Errors:</strong> ${call.analysis.errors.join(", ")}</div>` : ""}
-          </div>
-        </div>
-      `
-        }
 
         return `
       <div class="sfcc-network-call" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
@@ -1346,22 +1307,6 @@ vertical-align: baseline !important;
               <div><strong>Duration:</strong> ${call.duration}ms</div>
             </div>
           </div>
-          
-          ${
-            call.requestHeaders && Object.keys(call.requestHeaders).length > 0
-              ? `
-            <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request Headers</div>
-              <div style="font-family: monospace; font-size: 9px; background: #f0f9ff; padding: 6px; border-radius: 3px; border: 1px solid #bae6fd; max-height: 120px; overflow: auto;">
-                ${Object.entries(call.requestHeaders)
-                  .slice(0, 10)
-                  .map(([key, value]) => `<div><strong>${key}:</strong> ${value}</div>`)
-                  .join("")}
-              </div>
-            </div>
-          `
-              : ""
-          }
           
           ${
             call.requestBody
@@ -1432,7 +1377,7 @@ vertical-align: baseline !important;
     let sessions = []
     try {
       sessions = this.sessionManager.sessions || []
-      console.log(`Found ${sessions.length} sessions to display`)
+      //console.log(`Found ${sessions.length} sessions to display`)
     } catch (error) {
       console.error("Error accessing sessions:", error)
       return `
@@ -1538,17 +1483,15 @@ vertical-align: baseline !important;
 
   async loadSessionsForDisplay() {
     if (this.isLoadingSessions) {
-      console.log("Already loading sessions, skipping...")
       return
     }
 
     this.isLoadingSessions = true
-    console.log("Loading sessions for display...")
 
     try {
       if (this.sessionManager && typeof this.sessionManager.loadSessions === "function") {
         await this.sessionManager.loadSessions()
-        console.log(`Loaded ${this.sessionManager.sessions?.length || 0} sessions`)
+        //console.log(`Loaded ${this.sessionManager.sessions?.length || 0} sessions`)
         this.sessionsLoaded = true
       } else {
         console.warn("SessionManager or loadSessions method not available")
@@ -1848,10 +1791,6 @@ vertical-align: baseline !important;
     if (this.isMonitoring) return
 
     this.isMonitoring = true
-    console.log("🟢 Started monitoring SFCC checkout calls")
-
-    // Don't create session here - wait for checkout ID
-    console.log("⏳ Waiting for checkout ID to create session...")
 
     // Start auto-save interval
     if (this.autoSaveInterval) {
@@ -1868,7 +1807,6 @@ vertical-align: baseline !important;
     if (!this.isMonitoring) return
 
     this.isMonitoring = false
-    console.log("🔴 Stopped monitoring SFCC checkout calls")
 
     // Clear auto-save interval
     if (this.autoSaveInterval) {
@@ -1885,18 +1823,18 @@ vertical-align: baseline !important;
     const requestBody = callData.requestBody
     const responseBody = callData.responseBody || callData.response
 
-    console.log("🔍 Extracting checkout ID from:", {
+    /* console.log("🔍 Extracting checkout ID from:", {
       url: url,
       hasRequestBody: !!requestBody,
       hasResponseBody: !!responseBody,
-    })
+    }) */
 
     // Priority 1: Extract from Salesforce Commerce API URLs
     // Pattern: /webruntime/api/services/data/v64.0/commerce/webstores/{webstoreId}/checkouts/{checkoutId}
     const salesforceCheckoutMatch = url.match(/\/checkouts\/([a-zA-Z0-9]{15,18})(?:\?|$)/)
     if (salesforceCheckoutMatch) {
       const checkoutId = salesforceCheckoutMatch[1]
-      console.log("✅ Found checkout ID in Salesforce URL:", checkoutId)
+      //console.log("✅ Found checkout ID in Salesforce URL:", checkoutId)
       return checkoutId
     }
 
@@ -1914,24 +1852,24 @@ vertical-align: baseline !important;
       if (parsedResponse && typeof parsedResponse === "object") {
         // Direct checkoutId field
         if (parsedResponse.checkoutId) {
-          console.log("✅ Found checkout ID in response.checkoutId:", parsedResponse.checkoutId)
+          //console.log("✅ Found checkout ID in response.checkoutId:", parsedResponse.checkoutId)
           return parsedResponse.checkoutId
         }
 
         // Check for id field (common in Salesforce APIs)
         if (parsedResponse.id && parsedResponse.id.length >= 15) {
-          console.log("✅ Found checkout ID in response.id:", parsedResponse.id)
+          //console.log("✅ Found checkout ID in response.id:", parsedResponse.id)
           return parsedResponse.id
         }
 
         // Check nested data structures
         if (parsedResponse.data) {
           if (parsedResponse.data.checkoutId) {
-            console.log("✅ Found checkout ID in response.data.checkoutId:", parsedResponse.data.checkoutId)
+            //console.log("✅ Found checkout ID in response.data.checkoutId:", parsedResponse.data.checkoutId)
             return parsedResponse.data.checkoutId
           }
           if (parsedResponse.data.id && parsedResponse.data.id.length >= 15) {
-            console.log("✅ Found checkout ID in response.data.id:", parsedResponse.data.id)
+            //console.log("✅ Found checkout ID in response.data.id:", parsedResponse.data.id)
             return parsedResponse.data.id
           }
         }
@@ -1948,7 +1886,7 @@ vertical-align: baseline !important;
           // Check for checkout ID in string format
           const stringMatch = requestBody.match(/checkoutId["':\s]*([a-zA-Z0-9]{15,18})/)
           if (stringMatch) {
-            console.log("✅ Found checkout ID in request body string:", stringMatch[1])
+            //console.log("✅ Found checkout ID in request body string:", stringMatch[1])
             return stringMatch[1]
           }
         }
@@ -1956,17 +1894,16 @@ vertical-align: baseline !important;
 
       if (parsedBody && typeof parsedBody === "object") {
         if (parsedBody.checkoutId) {
-          console.log("✅ Found checkout ID in request.checkoutId:", parsedBody.checkoutId)
+          //console.log("✅ Found checkout ID in request.checkoutId:", parsedBody.checkoutId)
           return parsedBody.checkoutId
         }
         if (parsedBody.id && parsedBody.id.length >= 15) {
-          console.log("✅ Found checkout ID in request.id:", parsedBody.id)
+          //console.log("✅ Found checkout ID in request.id:", parsedBody.id)
           return parsedBody.id
         }
       }
     }
 
-    console.log("❌ No checkout ID found in call data")
     return null
   }
 
@@ -1985,21 +1922,21 @@ vertical-align: baseline !important;
       const extractedCheckoutId = this.extractCheckoutId(callData)
 
       if (extractedCheckoutId) {
-        console.log("🆔 Extracted checkout ID:", extractedCheckoutId, "from:", callData.url)
+        //console.log("🆔 Extracted checkout ID:", extractedCheckoutId, "from:", callData.url)
 
         // Check if we need to switch sessions or create first session
         if (!this.currentCheckoutId && !this.currentSession) {
           // First checkout ID detected - create initial session
-          console.log("🆔 First checkout ID detected, creating initial session:", extractedCheckoutId)
+          //console.log("🆔 First checkout ID detected, creating initial session:", extractedCheckoutId)
           this.currentCheckoutId = extractedCheckoutId
           this.createNewSessionWithCheckoutId(extractedCheckoutId)
         } else if (this.currentCheckoutId && this.currentCheckoutId !== extractedCheckoutId) {
           // Checkout ID changed - handle transition
-          console.log("🔄 Checkout ID changed from", this.currentCheckoutId, "to", extractedCheckoutId)
+          //console.log("🔄 Checkout ID changed from", this.currentCheckoutId, "to", extractedCheckoutId)
           this.handleCheckoutIdChange(extractedCheckoutId)
         } else if (!this.currentCheckoutId) {
           // Have a session but no checkout ID - update it
-          console.log("🆔 Adding checkout ID to existing session:", extractedCheckoutId)
+          //console.log("🆔 Adding checkout ID to existing session:", extractedCheckoutId)
           this.currentCheckoutId = extractedCheckoutId
           if (this.currentSession) {
             this.currentSession.checkoutId = extractedCheckoutId
@@ -2034,7 +1971,7 @@ vertical-align: baseline !important;
       // Update panel if it's open
       this.updatePanelContent()
 
-      console.log("📞 Network call processed:", callData.method, callData.url)
+      //console.log("📞 Network call processed:", callData.method, callData.url)
     } catch (error) {
       console.error("Error handling network call:", error)
     }
@@ -2051,7 +1988,7 @@ vertical-align: baseline !important;
       const existingSession = this.sessionManager.findSessionByCheckoutId(checkoutId)
 
       if (existingSession && !existingSession.endTime) {
-        console.log("🔄 Found existing active session for checkout ID, loading it:", existingSession.id)
+        //console.log("🔄 Found existing active session for checkout ID, loading it:", existingSession.id)
         this.loadSession(existingSession.id)
         return
       }
@@ -2068,11 +2005,11 @@ vertical-align: baseline !important;
         checkoutData: { ...this.checkoutData },
       }
 
-      console.log("📝 Creating new session with checkout ID:", checkoutId)
+      //console.log("📝 Creating new session with checkout ID:", checkoutId)
 
       if (typeof this.sessionManager.createNewSession === "function") {
         this.currentSession = this.sessionManager.createNewSession(sessionData)
-        console.log("✅ Created new session with checkout ID:", this.currentSession.id, checkoutId)
+        //console.log("✅ Created new session with checkout ID:", this.currentSession.id, checkoutId)
       } else {
         console.error("No session creation method available")
         return
@@ -2088,7 +2025,7 @@ vertical-align: baseline !important;
     if (!this.sessionManager || !checkoutId) return
 
     try {
-      console.log("🔍 Checking for existing session with checkout ID:", checkoutId)
+      //console.log("🔍 Checking for existing session with checkout ID:", checkoutId)
 
       // Load sessions first to ensure we have the latest data
       await this.sessionManager.loadSessions()
@@ -2096,14 +2033,14 @@ vertical-align: baseline !important;
       const existingSession = this.sessionManager.findSessionByCheckoutId(checkoutId)
 
       if (existingSession && !existingSession.endTime) {
-        console.log("🔄 Found existing active session for checkout ID, switching...")
+        //console.log("🔄 Found existing active session for checkout ID, switching...")
 
         // Load the existing session
         this.loadSession(existingSession.id)
         return true
       }
 
-      console.log("ℹ️ No existing active session found for checkout ID:", checkoutId)
+      //console.log("ℹ️ No existing active session found for checkout ID:", checkoutId)
       return false
     } catch (error) {
       console.error("Error checking for existing session:", error)
@@ -2112,7 +2049,7 @@ vertical-align: baseline !important;
   }
 
   handleCheckoutIdChange(newCheckoutId) {
-    console.log("🔄 Handling checkout ID change:", this.currentCheckoutId, "->", newCheckoutId)
+    //console.log("🔄 Handling checkout ID change:", this.currentCheckoutId, "->", newCheckoutId)
 
     // Check if there's an existing session with this checkout ID
     this.checkForExistingSession(newCheckoutId).then((foundExisting) => {
@@ -2121,7 +2058,7 @@ vertical-align: baseline !important;
         this.currentCheckoutId = newCheckoutId
         if (this.currentSession) {
           this.currentSession.checkoutId = newCheckoutId
-          console.log("✅ Updated current session with new checkout ID:", newCheckoutId)
+          //console.log("✅ Updated current session with new checkout ID:", newCheckoutId)
           this.updatePanelContent()
         }
       }
@@ -2136,14 +2073,13 @@ vertical-align: baseline !important;
     }
 
     if (!this.currentCheckoutId) {
-      console.log("⏳ No checkout ID available yet, waiting...")
       return
     }
 
     try {
       // Check if we already have an active session
       if (this.currentSession && this.currentSession.id) {
-        console.log("📋 Continuing existing session:", this.currentSession.id)
+        //console.log("📋 Continuing existing session:", this.currentSession.id)
         return
       }
 
@@ -2172,17 +2108,17 @@ vertical-align: baseline !important;
         checkoutData: { ...this.checkoutData },
       }
 
-      console.log("📝 Creating new session with data:", {
+      /* console.log("📝 Creating new session with data:", {
         checkoutId: sessionData.checkoutId,
         networkCallsCount: sessionData.networkCalls.length,
-      })
+      }) */
 
       if (typeof this.sessionManager.createNewSession === "function") {
         this.currentSession = this.sessionManager.createNewSession(sessionData)
-        console.log("✅ Created new session:", this.currentSession.id)
+        //console.log("✅ Created new session:", this.currentSession.id)
       } else if (typeof this.sessionManager.createSession === "function") {
         this.currentSession = this.sessionManager.createSession(sessionData)
-        console.log("✅ Created new session (legacy):", this.currentSession.id)
+        //console.log("✅ Created new session (legacy):", this.currentSession.id)
       } else {
         console.error("No session creation method available")
         return
@@ -2211,7 +2147,7 @@ vertical-align: baseline !important;
 
       if (typeof this.sessionManager.saveSession === "function") {
         this.sessionManager.saveSession(this.currentSession)
-        console.log("💾 Saved current session:", this.currentSession.id)
+        //console.log("💾 Saved current session:", this.currentSession.id)
       } else {
         console.warn("SessionManager.saveSession method not available")
       }
@@ -2239,7 +2175,7 @@ vertical-align: baseline !important;
       // Save the session
       this.saveCurrentSession()
 
-      console.log("🏁 Ended session:", this.currentSession.id)
+      //console.log("🏁 Ended session:", this.currentSession.id)
 
       // Clear current session
       this.currentSession = null
@@ -2282,7 +2218,7 @@ vertical-align: baseline !important;
           this.checkoutData = session.checkoutData || {}
           this.currentCheckoutId = session.checkoutId
 
-          console.log("📂 Loaded session:", sessionId, "with checkout ID:", this.currentCheckoutId)
+          //console.log("📂 Loaded session:", sessionId, "with checkout ID:", this.currentCheckoutId)
 
           // Update display
           this.updatePanelContent()
@@ -2309,7 +2245,7 @@ vertical-align: baseline !important;
     try {
       if (typeof this.sessionManager.deleteSession === "function") {
         this.sessionManager.deleteSession(sessionId)
-        console.log("🗑️ Deleted session:", sessionId)
+        //console.log("🗑️ Deleted session:", sessionId)
 
         // If this was the current session, clear it
         if (this.currentSession && this.currentSession.id === sessionId) {
@@ -2355,7 +2291,7 @@ vertical-align: baseline !important;
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
 
-        console.log("📤 Exported session:", sessionId)
+        //console.log("📤 Exported session:", sessionId)
       }
     } catch (error) {
       console.error("Error exporting session:", error)
@@ -2375,7 +2311,6 @@ vertical-align: baseline !important;
     try {
       if (typeof this.sessionManager.clearAllSessions === "function") {
         this.sessionManager.clearAllSessions()
-        console.log("🗑️ Cleared all sessions")
 
         // Clear current session
         this.currentSession = null
@@ -2518,8 +2453,6 @@ vertical-align: baseline !important;
         })
       })
 
-      console.log("✅ Salesforce data sync completed")
-
       // Update last sync time in storage
       await this.safeChromeCall(() => {
         return this.chrome.storage.local.set({ lastSync: Date.now() })
@@ -2554,7 +2487,6 @@ vertical-align: baseline !important;
     }
 
     this.updatePanelContent()
-    console.log("🧹 Cleared all data")
   }
 
   exportData() {
@@ -2581,7 +2513,38 @@ vertical-align: baseline !important;
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
 
-    console.log("📤 Data exported")
+  }
+
+  openSidePanelManually() {
+    try {
+      // Check if panel already exists
+      let tab = document.getElementById("sfcc-debugger-tab")
+      let panel = document.getElementById("sfcc-debugger-panel")
+
+      if (!tab || !panel) {
+        // Inject the side panel even if not on checkout page
+        this.injectSidePanel()
+        tab = document.getElementById("sfcc-debugger-tab")
+        panel = document.getElementById("sfcc-debugger-panel")
+      }
+
+      if (tab && panel) {
+        // Open the panel
+        this.safeSetStyle(panel, "right", "0px")
+        this.safeSetStyle(tab, "display", "none", "important")
+
+        // Update panel content
+        this.updatePanelContent()
+
+        return true
+      } else {
+        console.error("Failed to create side panel elements")
+        return false
+      }
+    } catch (error) {
+      console.error("Error opening side panel manually:", error)
+      return false
+    }
   }
 }
 

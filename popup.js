@@ -1,6 +1,14 @@
+document.addEventListener("DOMContentLoaded", () => {
+  try {
+    window.popupController = new PopupController(window.chrome)
+  } catch (error) {
+    console.error("Failed to initialize popup controller:", error)
+  }
+})
+
 class PopupController {
-  constructor() {
-    this.chrome = window.chrome
+  constructor(chrome) {
+    this.chrome = chrome || window.chrome
     this.salesforceAPI = new window.SalesforceAPI()
     this.correlations = []
     this.lastSync = null
@@ -24,18 +32,32 @@ class PopupController {
     this.toggleAccountManagement = this.toggleAccountManagement.bind(this)
     this.cancelForm = this.cancelForm.bind(this)
     this.updateInstanceTypeUI = this.updateInstanceTypeUI.bind(this)
+    this.openSidePanel = this.openSidePanel.bind(this)
+    this.showSessionCookies = this.showSessionCookies.bind(this)
+    this.findSessionCookiesAnywhere = this.findSessionCookiesAnywhere.bind(this)
+    this.clearData = this.clearData.bind(this)
+    this.exportData = this.exportData.bind(this)
+    this.copySessionId = this.copySessionId.bind(this)
+    this.useThisSession = this.useThisSession.bind(this)
 
     this.init()
   }
 
   async init() {
     try {
+      // Check if Chrome APIs are available
+      if (!this.chrome || !this.chrome.storage) {
+        this.showStatus("Chrome extension APIs not available", "error")
+        return
+      }
+
       await this.loadAccounts()
       await this.loadActiveConnection()
       this.setupEventListeners()
       this.updateUI()
     } catch (error) {
       console.error("Failed to initialize popup:", error)
+      this.showStatus("Failed to initialize popup", "error")
     }
   }
 
@@ -54,14 +76,14 @@ class PopupController {
       this.salesforceLogs = result.salesforceLogs || []
       this.lastSync = result.lastSync
 
-      console.log(
+      /* console.log(
         "Loaded accounts:",
         this.accounts.length,
         "Active:",
         this.activeAccountId,
         "Correlations:",
         this.correlations.length,
-      )
+      ) */
     } catch (error) {
       console.error("Failed to load accounts:", error)
     }
@@ -78,7 +100,7 @@ class PopupController {
       const connectResult = await this.salesforceAPI.connect(activeAccount.instanceUrl, activeAccount.sessionId)
 
       if (connectResult.success) {
-        console.log("Active account connection restored")
+        //console.log("Active account connection restored")
       } else {
         console.warn("Active account connection failed, clearing active account")
         this.activeAccountId = null
@@ -149,12 +171,6 @@ class PopupController {
       addAccountBtn.addEventListener("click", this.addAccount)
     }
 
-    // Manage accounts button
-    const manageBtn = document.getElementById("manage-accounts-btn")
-    if (manageBtn) {
-      manageBtn.addEventListener("click", this.toggleAccountManagement)
-    }
-
     // Instance type radio buttons
     const productionRadio = document.getElementById("instance-production")
     const sandboxRadio = document.getElementById("instance-sandbox")
@@ -164,6 +180,30 @@ class PopupController {
     }
     if (sandboxRadio) {
       sandboxRadio.addEventListener("change", this.updateInstanceTypeUI)
+    }
+
+    // Open side panel button
+    const openPanelBtn = document.getElementById("open-panel-btn")
+    if (openPanelBtn) {
+      openPanelBtn.addEventListener("click", this.openSidePanel)
+    }
+
+    // Show cookies button
+    const showCookiesBtn = document.getElementById("show-cookies-btn")
+    if (showCookiesBtn) {
+      showCookiesBtn.addEventListener("click", this.findSessionCookiesAnywhere)
+    }
+
+    // Clear data button
+    const clearDataBtn = document.getElementById("clear-data-btn")
+    if (clearDataBtn) {
+      clearDataBtn.addEventListener("click", this.clearData)
+    }
+
+    // Export data button
+    const exportDataBtn = document.getElementById("export-data-btn")
+    if (exportDataBtn) {
+      exportDataBtn.addEventListener("click", this.exportData)
     }
 
     // Listen for sync requests from content script
@@ -182,7 +222,6 @@ class PopupController {
       })
     }
 
-    console.log("Event listeners setup complete")
   }
 
   updateInstanceTypeUI() {
@@ -283,6 +322,39 @@ class PopupController {
     this.showStatus("Account deleted", "info")
   }
 
+  debugAccountManagement() {
+    /* console.log("🔍 Account Management Debug Info:")
+    console.log("Total accounts:", this.accounts.length)
+    console.log("Active account ID:", this.activeAccountId)
+    console.log(
+      "Accounts:",
+      this.accounts.map((acc) => ({
+        id: acc.id,
+        name: acc.name,
+        instanceType: acc.instanceType,
+      })),
+    ) */
+
+    // Check if event listeners are properly bound
+    const accountList = document.getElementById("account-list")
+    if (accountList) {
+      const buttons = accountList.querySelectorAll("button")
+      console.log("Found buttons in account list:", buttons.length)
+      buttons.forEach((btn, index) => {
+        console.log(`Button ${index}:`, {
+          className: btn.className,
+          textContent: btn.textContent,
+          hasClickListener: btn.onclick !== null,
+          dataAttributes: Object.fromEntries(
+            Array.from(btn.attributes)
+              .filter((attr) => attr.name.startsWith("data-"))
+              .map((attr) => [attr.name, attr.value]),
+          ),
+        })
+      })
+    }
+  }
+
   showAccountForm() {
     // Hide other sections
     document.getElementById("account-selector").style.display = "none"
@@ -311,6 +383,9 @@ class PopupController {
     document.getElementById("account-name-input").value = ""
     document.getElementById("instance-url").value = ""
     document.getElementById("session-id").value = ""
+
+    // Hide cookie display
+    document.getElementById("cookie-display").classList.remove("show")
 
     // Reset to production
     const productionRadio = document.getElementById("instance-production")
@@ -509,11 +584,28 @@ class PopupController {
           <div class="account-url">${new URL(account.instanceUrl).hostname}</div>
         </div>
         <div class="account-actions-small">
-          ${account.id !== this.activeAccountId ? `<button class="btn btn-small btn-select" onclick="window.popupController.selectAccount('${account.id}')">Select</button>` : '<span style="font-size: 10px; color: #22c55e; font-weight: 600;">ACTIVE</span>'}
-          <button class="btn btn-small btn-edit" onclick="window.popupController.editAccount('${account.id}')">Edit</button>
-          <button class="btn btn-small btn-delete" onclick="window.popupController.deleteAccount('${account.id}')">Delete</button>
+          ${account.id !== this.activeAccountId ? `<button class="btn btn-small btn-select" data-action="select" data-account-id="${account.id}">Select</button>` : '<span style="font-size: 10px; color: #22c55e; font-weight: 600;">ACTIVE</span>'}
+          <button class="btn btn-small btn-edit" data-action="edit" data-account-id="${account.id}">Edit</button>
+          <button class="btn btn-small btn-delete" data-action="delete" data-account-id="${account.id}">Delete</button>
         </div>
       `
+
+      // Add event listeners for the buttons
+      const selectBtn = item.querySelector('[data-action="select"]')
+      const editBtn = item.querySelector('[data-action="edit"]')
+      const deleteBtn = item.querySelector('[data-action="delete"]')
+
+      if (selectBtn) {
+        selectBtn.addEventListener("click", () => this.selectAccount(account.id))
+      }
+
+      if (editBtn) {
+        editBtn.addEventListener("click", () => this.editAccount(account.id))
+      }
+
+      if (deleteBtn) {
+        deleteBtn.addEventListener("click", () => this.deleteAccount(account.id))
+      }
 
       container.appendChild(item)
     })
@@ -524,6 +616,11 @@ class PopupController {
     this.updateConnectionInfo()
     this.updateSalesforceStatus()
     this.updateCorrelationSummary()
+
+    // Add debug logging
+    if (this.accounts.length > 0) {
+      this.debugAccountManagement()
+    }
   }
 
   updateAccountSelector() {
@@ -642,8 +739,6 @@ class PopupController {
       return
     }
 
-    console.log("🔄 Starting sync with checkout data...")
-
     try {
       this.showStatus("Fetching Salesforce logs...", "info")
 
@@ -671,16 +766,18 @@ class PopupController {
 
       // Send logs to content script for display
       try {
-        const tabs = await new Promise((resolve) => {
-          this.chrome.tabs.query({ active: true, currentWindow: true }, resolve)
-        })
-
-        if (tabs[0]) {
-          this.chrome.tabs.sendMessage(tabs[0].id, {
-            action: "updateSalesforceLogs",
-            logs: logs,
+        if (this.chrome.tabs && this.chrome.tabs.query) {
+          const tabs = await new Promise((resolve) => {
+            this.chrome.tabs.query({ active: true, currentWindow: true }, resolve)
           })
-          console.log("📤 Sent logs to content script")
+
+          if (tabs[0]) {
+            this.chrome.tabs.sendMessage(tabs[0].id, {
+              action: "updateSalesforceLogs",
+              logs: logs,
+            })
+            //console.log("📤 Sent logs to content script")
+          }
         }
       } catch (error) {
         console.warn("Could not send logs to content script:", error)
@@ -696,7 +793,7 @@ class PopupController {
     const syncEl = document.getElementById("last-sync")
 
     if (countEl) {
-      countEl.textContent = this.correlations.length
+      countEl.textContent = this.salesforceLogs.length
     }
 
     if (syncEl) {
@@ -762,7 +859,7 @@ class PopupController {
         }
       }, 4000)
 
-      console.log(`📢 Status: ${message} (${type})`)
+      //console.log(`📢 Status: ${message} (${type})`)
     } catch (error) {
       console.error("Failed to show status:", error)
     }
@@ -771,14 +868,281 @@ class PopupController {
   generateId() {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
   }
-}
 
-// Initialize popup when DOM is loaded
-document.addEventListener("DOMContentLoaded", () => {
-  console.log("Initializing popup...")
-  try {
-    window.popupController = new PopupController()
-  } catch (error) {
-    console.error("Failed to initialize popup controller:", error)
+  async openSidePanel() {
+    try {
+      // Check if Chrome APIs are available
+      if (!this.chrome.tabs || !this.chrome.tabs.query) {
+        this.showStatus("Chrome tabs API not available", "error")
+        return
+      }
+
+      // Get the active tab
+      const tabs = await new Promise((resolve) => {
+        this.chrome.tabs.query({ active: true, currentWindow: true }, resolve)
+      })
+
+      if (tabs[0]) {
+        // Send message to content script to open panel manually
+        this.chrome.tabs.sendMessage(
+          tabs[0].id,
+          {
+            action: "openSidePanelManually",
+          },
+          (response) => {
+            if (this.chrome.runtime.lastError) {
+              this.showStatus("Could not open side panel. Make sure you're on a Salesforce page.", "error")
+            } else if (response && response.success) {
+              this.showStatus("Side panel opened!", "success")
+            } else {
+              this.showStatus("Failed to open side panel", "error")
+            }
+          },
+        )
+      }
+    } catch (error) {
+      console.error("Error opening side panel:", error)
+      this.showStatus("Error opening side panel", "error")
+    }
   }
-})
+
+  async findSessionCookiesAnywhere() {
+    try {
+      this.showStatus("Looking for session cookies...", "info")
+
+      // Check if Chrome APIs are available
+      if (!this.chrome.cookies || !this.chrome.cookies.getAll) {
+        this.showStatus("Chrome cookies API not available", "error")
+        return
+      }
+
+      // Get all cookies with name 'sid'
+      const sidCookies = await new Promise((resolve, reject) => {
+        this.chrome.cookies.getAll({ name: "sid" }, (cookies) => {
+          if (this.chrome.runtime.lastError) {
+            reject(this.chrome.runtime.lastError)
+          } else {
+            resolve(cookies)
+          }
+        })
+      })
+
+      //console.log("Found sid cookies:", sidCookies)
+
+      if (sidCookies.length === 0) {
+        this.showStatus("No session ID cookies found. Please log in to Salesforce first.", "warning")
+        return
+      }
+
+      // Display the cookies
+      this.displayCookies(sidCookies, "Various domains")
+      this.showStatus(`Found ${sidCookies.length} session cookie(s)`, "success")
+    } catch (error) {
+      console.error("Error reading cookies:", error)
+      this.showStatus(`Error reading cookies: ${error.message}`, "error")
+    }
+  }
+
+  async showSessionCookies() {
+    // Just call the findSessionCookiesAnywhere method as it's more robust
+    await this.findSessionCookiesAnywhere()
+  }
+
+  copySessionId(sessionId) {
+    try {
+      navigator.clipboard
+        .writeText(sessionId)
+        .then(() => {
+          this.showStatus("Session ID copied to clipboard!", "success")
+        })
+        .catch(() => {
+          // Fallback for older browsers
+          const textArea = document.createElement("textarea")
+          textArea.value = sessionId
+          document.body.appendChild(textArea)
+          textArea.select()
+          document.execCommand("copy")
+          document.body.removeChild(textArea)
+          this.showStatus("Session ID copied to clipboard!", "success")
+        })
+    } catch (error) {
+      console.error("Failed to copy session ID:", error)
+      this.showStatus("Failed to copy session ID", "error")
+    }
+  }
+
+  useThisSession(cookie) {
+    try {
+      // Extract domain and create instance URL
+      const domain = cookie.domain.startsWith(".") ? cookie.domain.slice(1) : cookie.domain
+      const instanceUrl = `https://${domain}`
+
+      // Detect instance type and generate account name
+      const instanceType = this.detectInstanceType(domain)
+      let accountName = domain.split(".")[0]
+
+      // Clean up account name
+      if (accountName.includes("--")) {
+        const parts = accountName.split("--")
+        accountName = `${parts[0]} (${parts[1]})`
+      }
+
+      // Set the form fields
+      document.getElementById("account-name-input").value = accountName
+      document.getElementById("instance-url").value = instanceUrl
+      document.getElementById("session-id").value = cookie.value
+
+      // Set the correct instance type radio button
+      const radioButton = document.getElementById(`instance-${instanceType}`)
+      if (radioButton) {
+        radioButton.checked = true
+        this.updateInstanceTypeUI()
+      }
+
+      this.showStatus("Session details filled in form!", "success")
+    } catch (error) {
+      console.error("Failed to use session:", error)
+      this.showStatus("Failed to fill form with session details", "error")
+    }
+  }
+
+  displayCookies(cookies, hostname) {
+    const cookieDisplay = document.getElementById("cookie-display")
+    const cookieList = document.getElementById("cookie-list")
+
+    // Clear previous cookies
+    cookieList.innerHTML = ""
+
+    cookies.forEach((cookie, index) => {
+      const cookieItem = document.createElement("div")
+      cookieItem.className = "cookie-item"
+
+      // Use the cookie's actual domain
+      const actualHostname = cookie.domain.startsWith(".") ? cookie.domain.slice(1) : cookie.domain
+      const instanceType = this.detectInstanceType(actualHostname)
+      const cookieTypeClass = instanceType === "sandbox" ? "instance-sandbox" : "instance-production"
+
+      cookieItem.innerHTML = `
+        <div class="cookie-header">
+          <div class="cookie-domain">${actualHostname}</div>
+          <div class="cookie-type ${cookieTypeClass}">${instanceType}</div>
+        </div>
+        <div class="cookie-value" title="Session ID">
+          ${cookie.value.substring(0, 20)}...
+        </div>
+        <div style="margin-top: 8px;">
+          <button class="btn btn-small btn-primary copy-session-btn" data-session-id="${cookie.value}">
+            Copy Session ID
+          </button>
+          <button class="btn btn-small btn-success use-session-btn" data-cookie='${JSON.stringify(cookie)}'>
+            Use This Session
+          </button>
+        </div>
+      `
+
+      // Add event listeners for the buttons
+      const copyBtn = cookieItem.querySelector(".copy-session-btn")
+      const useBtn = cookieItem.querySelector(".use-session-btn")
+
+      if (copyBtn) {
+        copyBtn.addEventListener("click", () => {
+          this.copySessionId(cookie.value)
+        })
+      }
+
+      if (useBtn) {
+        useBtn.addEventListener("click", () => {
+          this.useThisSession(cookie)
+        })
+      }
+
+      cookieList.appendChild(cookieItem)
+    })
+
+    // Show the cookie display
+    cookieDisplay.classList.add("show")
+  }
+
+  detectInstanceType(hostname) {
+    // Check if it's a sandbox based on hostname patterns
+    if (
+      hostname.includes("sandbox") ||
+      hostname.includes("--") ||
+      hostname.includes("test") ||
+      hostname.includes("dev")
+    ) {
+      return "sandbox"
+    }
+    return "production"
+  }
+
+  async clearData() {
+    try {
+      // Check if Chrome APIs are available
+      if (!this.chrome.tabs || !this.chrome.tabs.query) {
+        this.showStatus("Chrome tabs API not available", "error")
+        return
+      }
+
+      // Get the active tab
+      const tabs = await new Promise((resolve) => {
+        this.chrome.tabs.query({ active: true, currentWindow: true }, resolve)
+      })
+
+      if (tabs[0]) {
+        // Send message to content script to clear data
+        this.chrome.tabs.sendMessage(
+          tabs[0].id,
+          {
+            action: "clearData",
+          },
+          (response) => {
+            if (response && response.success) {
+              this.showStatus("Data cleared!", "success")
+            } else {
+              this.showStatus("Failed to clear data", "error")
+            }
+          },
+        )
+      }
+    } catch (error) {
+      console.error("Error clearing data:", error)
+      this.showStatus("Error clearing data", "error")
+    }
+  }
+
+  async exportData() {
+    try {
+      // Check if Chrome APIs are available
+      if (!this.chrome.tabs || !this.chrome.tabs.query) {
+        this.showStatus("Chrome tabs API not available", "error")
+        return
+      }
+
+      // Get the active tab
+      const tabs = await new Promise((resolve) => {
+        this.chrome.tabs.query({ active: true, currentWindow: true }, resolve)
+      })
+
+      if (tabs[0]) {
+        // Send message to content script to export data
+        this.chrome.tabs.sendMessage(
+          tabs[0].id,
+          {
+            action: "exportData",
+          },
+          (response) => {
+            if (response && response.success) {
+              this.showStatus("Data exported!", "success")
+            } else {
+              this.showStatus("Failed to export data", "error")
+            }
+          },
+        )
+      }
+    } catch (error) {
+      console.error("Error exporting data:", error)
+      this.showStatus("Error exporting data", "error")
+    }
+  }
+}

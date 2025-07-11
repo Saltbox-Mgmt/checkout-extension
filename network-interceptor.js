@@ -1,6 +1,5 @@
 // Network interceptor to capture fetch and XMLHttpRequest calls
 ;(() => {
-  console.log("🔧 Loading network interceptor...")
 
   // Store original functions
   const originalFetch = window.fetch
@@ -215,5 +214,4 @@
     return originalXHRSend.call(this, body)
   }
 
-  console.log("✅ Network interceptor loaded")
 })()
