@@ -308,26 +308,26 @@ class SalesforceAPI {
         const startTimeStr = startTime.toISOString()
         const endTimeStr = endTime.toISOString()
   
-        // Filter specifically for UniversalPerfLogger operations (Commerce Cloud performance logs)
+        // Filter out /webruntime/api/apex/execute operations (Commerce Cloud performance logs)
         const soql = `
           SELECT Id, Application, DurationMilliseconds, Location, LogLength, 
                  LogUser.Name, Operation, Request, StartTime, Status
           FROM ApexLog 
           WHERE StartTime >= ${startTimeStr} 
           AND StartTime <= ${endTimeStr}
-          AND Operation = 'UniversalPerfLogger'
+          AND Operation != '/webruntime/api/apex/execute'
           ORDER BY StartTime DESC
           LIMIT ${maxRecords}
         `
   
-        console.log("📝 SOQL Query (filtering for UniversalPerfLogger):", soql)
+        console.log("📝 SOQL Query (filtering out /webruntime/api/apex/execute):", soql)
   
         const result = await this.makeRequest(`/services/data/v58.0/query?q=${encodeURIComponent(soql)}`)
-        console.log(`📊 Found ${result.totalSize} UniversalPerfLogger logs in time window`)
+        console.log(`📊 Found ${result.totalSize} logs in time window`)
   
-        // If no UniversalPerfLogger logs found, let's check what operations are available
+        // If no logs found, let's check what operations are available
         if (result.totalSize === 0) {
-          console.warn("⚠️ No UniversalPerfLogger logs found. Checking available operations...")
+          console.warn("⚠️ No logs found. Checking available operations...")
   
           try {
             const operationsQuery = `
@@ -367,7 +367,7 @@ class SalesforceAPI {
   
         // Log details about what we found
         if (result.records && result.records.length > 0) {
-          console.log("🔍 UniversalPerfLogger log breakdown:")
+          console.log("🔍  log breakdown:")
           const logsByRequest = {}
           const logsByStatus = {}
   
@@ -388,17 +388,12 @@ class SalesforceAPI {
             latest: result.records[0]?.StartTime,
           })
         } else {
-          console.warn("⚠️ No UniversalPerfLogger logs found in the specified time window")
-          console.log("🔍 Debugging suggestions:")
-          console.log("- Perform some Commerce Cloud checkout actions to generate UniversalPerfLogger logs")
-          console.log("- Check if Commerce Cloud performance logging is enabled")
-          console.log("- Verify you're on a Commerce Cloud org with B2B Commerce or Experience Cloud")
-          console.log("- Try expanding the time window if you performed actions earlier")
+          console.warn("⚠️ No logs found in the specified time window")
         }
   
         // Get detailed log content for each log (limit to avoid rate limits)
         const logsToProcess = result.records.slice(0, Math.min(20, result.records.length))
-        console.log(`📝 Processing ${logsToProcess.length} UniversalPerfLogger logs for detailed content`)
+        console.log(`📝 Processing ${logsToProcess.length} logs for detailed content`)
   
         const logsWithContent = await Promise.all(
           logsToProcess.map(async (log) => {
@@ -406,7 +401,7 @@ class SalesforceAPI {
               const logBody = await this.getLogBody(log.Id)
               const parsed = this.parseCommerceLogContent(logBody) // Use specialized parser
   
-              console.log(`📄 UniversalPerfLogger ${log.Id}:`, {
+              console.log(`📄 log ${log.Id}:`, {
                 request: log.Request,
                 duration: log.DurationMilliseconds,
                 bodyLength: logBody?.length || 0,
@@ -432,7 +427,7 @@ class SalesforceAPI {
           }),
         )
   
-        console.log("✅ UniversalPerfLogger logs processed successfully")
+        console.log("✅ logs processed successfully")
         return {
           totalSize: result.totalSize,
           logs: logsWithContent,
@@ -464,7 +459,7 @@ class SalesforceAPI {
       return logBody
     }
   
-    // Specialized parser for Commerce Cloud UniversalPerfLogger logs
+    // Specialized parser for Commerce Cloud logs
     parseCommerceLogContent(logBody) {
       if (!logBody) return null
   
@@ -670,7 +665,7 @@ class SalesforceAPI {
         return []
       }
   
-      console.log(`🔗 Correlating ${checkoutCalls.length} checkout calls with UniversalPerfLogger logs`)
+      console.log(`🔗 Correlating ${checkoutCalls.length} checkout calls with logs`)
       console.log("🛒 Checkout calls summary:", {
         totalCalls: checkoutCalls.length,
         timeRange: {
@@ -707,15 +702,10 @@ class SalesforceAPI {
           maxRecords: 100,
         })
   
-        console.log(`📊 Found ${logs.length} UniversalPerfLogger logs in correlation time window`)
+        console.log(`📊 Found ${logs.length} logs in correlation time window`)
   
         if (logs.length === 0) {
-          console.warn("⚠️ No UniversalPerfLogger logs found in the time window")
-          console.log("💡 Suggestions:")
-          console.log("- Perform Commerce Cloud checkout actions to generate UniversalPerfLogger logs")
-          console.log("- Check if you're on a Commerce Cloud enabled org")
-          console.log("- Verify Commerce Cloud performance logging is enabled")
-          console.log("- Try expanding the time window if you performed actions earlier")
+          console.warn("⚠️ No logs found in the time window")
           return []
         }
   
@@ -788,10 +778,6 @@ class SalesforceAPI {
           })
         } else {
           console.warn("❌ No correlations found above threshold")
-          console.log("🔍 Debug info:")
-          console.log("- Try performing more Commerce Cloud checkout actions")
-          console.log("- Check if UniversalPerfLogger logs contain relevant content")
-          console.log("- Verify checkout calls and logs are from the same timeframe")
         }
   
         return sortedCorrelations
@@ -895,7 +881,7 @@ class SalesforceAPI {
     }
   
     calculateRelevanceScore(checkoutCall, salesforceLog) {
-      // Use the Commerce-specific scoring for UniversalPerfLogger logs
+      // Use the Commerce-specific scoring for logs
       if (salesforceLog.Operation === "UniversalPerfLogger") {
         return this.calculateCommerceRelevanceScore(checkoutCall, salesforceLog)
       }

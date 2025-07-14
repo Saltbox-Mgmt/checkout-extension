@@ -15,6 +15,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         })
       }
     })
+  } else if (message.action === "syncSalesforceData") {
+    // Forward sync request to popup if it's open, otherwise return error
+    // Since we can't directly communicate with popup, we'll let the content script handle this
+    sendResponse({
+      success: false,
+      error: "Please use the popup to sync Salesforce data",
+    })
   } else if (message.type === "networkCall" || message.type === "error" || message.type === "debugLog") {
     // Forward messages to devtools panel
     chrome.runtime.sendMessage(message)

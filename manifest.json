@@ -25,17 +25,16 @@
       ],
       "js": [
         "content.js", 
-        "session-manager.js", 
-        "correlation-engine.js", 
-        "checkout-call-analyzer.js", 
-        "salesforce-api.js",
-        "salesforce-logger.js",
-        "network-interceptor.js"
+        "analyzer-files/session-manager.js", 
+        "analyzer-files/correlation-engine.js", 
+        "analyzer-files/checkout-call-analyzer.js", 
+        "analyzer-files/salesforce-api.js",
+        "analyzer-files/salesforce-logger.js",
+        "analyzer-files/network-interceptor.js"
       ],
       "run_at": "document_start"
     }
   ],
-  "devtools_page": "devtools.html",
   "action": {
     "default_popup": "popup.html",
     "default_title": "SFCC Checkout Debugger"
@@ -43,14 +42,13 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "network-interceptor.js",
-        "correlation-engine.js",
-        "checkout-call-analyzer.js",
-        "commerce-analyzer.js",
-        "salesforce-api.js",
-        "salesforce-logger.js",
-        "injected.js",
-        "session-manager.js"
+        "analyzer-files/network-interceptor.js",
+        "analyzer-files/correlation-engine.js",
+        "analyzer-files/checkout-call-analyzer.js",
+        "analyzer-files/commerce-analyzer.js",
+        "analyzer-files/salesforce-api.js",
+        "analyzer-files/salesforce-logger.js",
+        "analyzer-files/session-manager.js"
       ],
       "matches": [
         "https://*.force.com/*",

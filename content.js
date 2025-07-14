@@ -125,10 +125,10 @@ class SFCCMonitor {
     ]
 
     // Load all scripts
-    this.loadScript("checkout-call-analyzer.js")
-    this.loadScript("correlation-engine.js")
-    this.loadScript("salesforce-logger.js")
-    this.loadScript("session-manager.js")
+    this.loadScript("analyzer-files/checkout-call-analyzer.js")
+    this.loadScript("analyzer-files/correlation-engine.js")
+    this.loadScript("analyzer-files/salesforce-logger.js")
+    this.loadScript("analyzer-files/session-manager.js")
 
     // Wait for all components with timeout
     const results = await Promise.allSettled(
@@ -159,7 +159,6 @@ class SFCCMonitor {
 
     // Final fallback check after a delay
     setTimeout(() => {
-
       // Check SessionManager one more time
       if (!this.sessionManager && window.SessionManager) {
         //console.log("🔧 Final SessionManager assignment")
@@ -184,7 +183,6 @@ class SFCCMonitor {
   }
 
   checkSessionManagerAvailability() {
-
     // Check if SessionManager is available even if event didn't fire
     if (window.SessionManager && typeof window.SessionManager === "object") {
       //console.log("🔍 SessionManager found directly on window object")
@@ -223,10 +221,9 @@ class SFCCMonitor {
     if (this.isContextValid()) {
       try {
         const script = document.createElement("script")
-        script.src = window.chrome.runtime.getURL("session-manager.js")
+        script.src = window.chrome.runtime.getURL("analyzer-files/session-manager.js")
 
         script.onload = () => {
-
           // Check again after a short delay
           setTimeout(() => {
             if (window.SessionManager && typeof window.SessionManager === "object") {
@@ -300,7 +297,6 @@ class SFCCMonitor {
       script.src = window.chrome.runtime.getURL(filename)
 
       script.onload = () => {
-
         // Special handling for session-manager.js
         if (filename === "session-manager.js") {
           // Give it a moment to execute and set up window.SessionManager
@@ -334,6 +330,13 @@ class SFCCMonitor {
         sendResponse({ success: true })
       } else if (message.action === "updateSalesforceLogs") {
         this.salesforceLogs = message.logs || []
+
+        // Add logs to current session if it exists
+        if (this.currentSession) {
+          this.currentSession.salesforceLogs = [...this.salesforceLogs]
+          this.saveCurrentSession() // Save the updated session
+        }
+
         this.updatePanelContent()
         sendResponse({ success: true })
       } else if (message.action === "getComponentStatus") {
@@ -405,7 +408,6 @@ class SFCCMonitor {
   }
 
   handleUrlChange() {
-
     const shouldShowTab = this.isCheckoutPage()
     const tab = document.getElementById("sfcc-debugger-tab")
     const panel = document.getElementById("sfcc-debugger-panel")
@@ -508,7 +510,7 @@ class SFCCMonitor {
     try {
       // Create script element that loads the external injected script
       const script = document.createElement("script")
-      script.src = window.chrome.runtime.getURL("network-interceptor.js")
+      script.src = window.chrome.runtime.getURL("analyzer-files/network-interceptor.js")
       script.onload = () => {
         script.remove() // Clean up after loading
       }
@@ -519,7 +521,6 @@ class SFCCMonitor {
       // Inject at the very beginning of head to catch early network calls
       const head = document.head || document.getElementsByTagName("head")[0] || document.documentElement
       head.insertBefore(script, head.firstChild)
-
     } catch (error) {
       console.error("Failed to inject network interceptor:", error)
     }
@@ -606,7 +607,6 @@ vertical-align: baseline !important;
 
       // Add event listeners
       this.setupPanelEventListeners()
-
     } catch (error) {
       console.error("Failed to inject side panel:", error)
     }
@@ -681,7 +681,6 @@ vertical-align: baseline !important;
         <button class="sfcc-tab" data-tab="sessions" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">Sessions</button>
         <button class="sfcc-tab" data-tab="correlations" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">Correlations</button>
         <button class="sfcc-tab" data-tab="logs" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">SF Logs</button>
-        <button class="sfcc-tab" data-tab="errors" style="flex: 1; padding: 12px 8px; border: none; background: none; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; transition: all 0.2s;">Errors</button>
       </div>
       
       <div class="sfcc-tab-content" id="sfcc-tab-content" style="flex: 1; overflow: auto; padding: 12px;">
@@ -1278,12 +1277,12 @@ vertical-align: baseline !important;
         const stageLabel = stage ? this.requirements.find((r) => r.key === stage)?.label || stage : "Other"
 
         // Get analysis from analyzer if available
-        let analysisInfo = ""
+        const analysisInfo = ""
 
         return `
       <div class="sfcc-network-call" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
-        <div class="sfcc-network-call-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
-          <div style="display: flex; align-items: center; flex: 1;">
+        <div class="sfcc-network-call-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; min-height: 40px;">
+          <div style="display: flex; align-items: center; flex: 1; min-height: 24px;">
             <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getMethodColor(call.method)};">${call.method}</span>
             <span style="font-family: monospace; font-size: 10px; color: #374151; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${call.urlName || this.truncateUrl(call.url)}</span>
             <span style="background: #dbeafe; color: #1d4ed8; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase; margin-left: 4px;">${stageLabel}</span>
@@ -1314,7 +1313,7 @@ vertical-align: baseline !important;
             <div style="margin-bottom: 12px;">
               <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Request Body</div>
               <div style="font-family: monospace; font-size: 9px; background: #fef3c7; padding: 6px; border-radius: 3px; border: 1px solid #fde68a; white-space: pre-wrap; max-height: 120px; overflow: auto;">
-                ${typeof call.requestBody === "string" ? call.requestBody.substring(0, 500) : JSON.stringify(call.requestBody, null, 2).substring(0, 500)}${(typeof call.requestBody === "string" ? call.requestBody : JSON.stringify(call.requestBody)).length > 500 ? "..." : ""}
+                ${typeof call.requestBody === "string" ? call.requestBody : JSON.stringify(call.requestBody, null, 2)}
               </div>
             </div>
           `
@@ -1329,11 +1328,8 @@ vertical-align: baseline !important;
               <div style="font-family: monospace; font-size: 9px; background: #f0fdf4; padding: 6px; border-radius: 3px; border: 1px solid #bbf7d0; white-space: pre-wrap; max-height: 120px; overflow: auto;">
                 ${(() => {
                   const responseData = call.responseBody || call.response
-                  const responseStr =
-                    typeof responseData === "string" ? responseData : JSON.stringify(responseData, null, 2)
-                  return responseStr
-                    ? responseStr.substring(0, 500) + (responseStr.length > 500 ? "..." : "")
-                    : "No response data"
+                  const responseStr = typeof responseData === "string" ? responseData : JSON.stringify(responseData, null, 2)
+  return responseStr || "No response data"
                 })()}
               </div>
             </div>
@@ -1562,7 +1558,7 @@ vertical-align: baseline !important;
             <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: #8b5cf6;">CORR</span>
             <span style="font-size: 11px; color: #374151; flex: 1;">${correlation.type}</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 8px; min-height: 24px;">
             <span style="font-size: 10px; color: #6b7280;">${new Date(correlation.timestamp).toLocaleTimeString()}</span>
             <div style="font-size: 11px; font-weight: 600; color: #8b5cf6;">
               ${(correlation.confidence * 100).toFixed(0)}%
@@ -1600,39 +1596,55 @@ vertical-align: baseline !important;
     return this.salesforceLogs
       .slice(0, 20) // Limit to avoid performance issues
       .map((log) => {
+        // Handle both parsed logs and raw logs
+        const logLevel = log.Status || "INFO"
+        const logMessage = log.Operation || log.Request || "Salesforce Log"
+        const logTime = log.StartTime || log.timestamp
+
         return `
       <div class="sfcc-log" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
-        <div class="sfcc-log-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
-          <div style="display: flex; align-items: center; flex: 1;">
-            <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getLogLevelColor(log.level)};">${log.level}</span>
-            <span style="font-size: 11px; color: #374151; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${log.message}</span>
+        <div class="sfcc-log-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; min-height: 40px;">
+          <div style="display: flex; align-items: center; flex: 1; min-height: 24px;">
+            <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getLogLevelColor(logLevel)};">${logLevel}</span>
+            <span style="font-size: 11px; color: #374151; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${logMessage}</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 10px; color: #6b7280;">${new Date(log.timestamp).toLocaleTimeString()}</span>
+          <div style="display: flex; align-items: center; gap: 8px; min-height: 24px;">
+            <span style="font-size: 10px; color: #6b7280;">${logTime ? new Date(logTime).toLocaleTimeString() : "Unknown time"}</span>
           </div>
         </div>
         <div class="sfcc-log-details" style="padding: 12px; background: white; border-top: 1px solid #e5e7eb; display: none; font-size: 11px;">
           <div style="margin-bottom: 12px;">
             <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Log Details</div>
             <div style="font-family: monospace; font-size: 9px; background: #f8fafc; padding: 6px; border-radius: 3px; border: 1px solid #e2e8f0;">
-              <div><strong>Level:</strong> ${log.level}</div>
-              <div><strong>Message:</strong> ${log.message}</div>
-              <div><strong>Time:</strong> ${new Date(log.timestamp).toLocaleString()}</div>
-              ${log.source ? `<div><strong>Source:</strong> ${log.source}</div>` : ""}
-              ${log.category ? `<div><strong>Category:</strong> ${log.category}</div>` : ""}
+              <div><strong>ID:</strong> ${log.Id || "Unknown"}</div>
+              <div><strong>Operation:</strong> ${log.Operation || "Unknown"}</div>
+              <div><strong>Duration:</strong> ${log.DurationMilliseconds || 0}ms</div>
+              <div><strong>Time:</strong> ${logTime ? new Date(logTime).toLocaleString() : "Unknown"}</div>
+              ${log.LogUser?.Name ? `<div><strong>User:</strong> ${log.LogUser.Name}</div>` : ""}
             </div>
           </div>
           
           ${
-            log.details
+            log.parsed?.errors?.length > 0
               ? `
             <div style="margin-bottom: 12px;">
-              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Additional Details</div>
-              <div style="font-family: monospace; font-size: 9px; background: #f0fdf4; padding: 6px; border-radius: 3px; border: 1px solid #bbf7d0; white-space: pre-wrap; max-height: 120px; overflow: auto;">
-                ${typeof log.details === "string" ? log.details : JSON.stringify(log.details, null, 2)}
+              <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Errors Found</div>
+              <div style="font-family: monospace; font-size: 9px; background: #fef2f2; padding: 6px; border-radius: 3px; border: 1px solid #fecaca; white-space: pre-wrap; max-height: 120px; overflow: auto;">
+                ${log.parsed.errors.map((error) => error.message).join("\n")}
               </div>
             </div>
           `
+              : ""
+          }
+          
+          ${
+            log.body
+              ? `
+<div style="margin-bottom: 12px;">
+  <div style="font-weight: 600; font-size: 10px; color: #374151; margin-bottom: 4px; text-transform: uppercase;">Log Body (Preview)</div>
+  <div style="font-family: monospace; font-size: 9px; background: #f0fdf4; padding: 6px; border-radius: 3px; border: 1px solid #bbf7d0; white-space: pre-wrap; max-height: 120px; overflow: auto;">${log.body.substring(0, 500)}${log.body.length > 500 ? "..." : ""}</div>
+</div>
+    `
               : ""
           }
         </div>
@@ -2431,8 +2443,8 @@ vertical-align: baseline !important;
     }
 
     try {
-      // Send message to background script to sync Salesforce data
-      await this.safeChromeCall(async () => {
+      // Send message to popup to sync Salesforce data
+      const response = await this.safeChromeCall(async () => {
         return new Promise((resolve, reject) => {
           this.chrome.runtime.sendMessage(
             {
@@ -2443,15 +2455,29 @@ vertical-align: baseline !important;
             (response) => {
               if (this.chrome.runtime.lastError) {
                 reject(new Error(this.chrome.runtime.lastError.message))
-              } else if (response && response.success) {
-                resolve(response)
               } else {
-                reject(new Error(response?.error || "Sync failed"))
+                resolve(response)
               }
             },
           )
         })
       })
+
+      if (response && response.success && response.logs) {
+        // Update local logs
+        this.salesforceLogs = response.logs
+
+        // Add to current session
+        if (this.currentSession) {
+          this.currentSession.salesforceLogs = [...this.salesforceLogs]
+          this.saveCurrentSession()
+        }
+
+        // Update display
+        this.updatePanelContent()
+
+        console.log(`✅ Synced ${response.logs.length} Salesforce logs`)
+      }
 
       // Update last sync time in storage
       await this.safeChromeCall(() => {
@@ -2512,7 +2538,6 @@ vertical-align: baseline !important;
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-
   }
 
   openSidePanelManually() {
