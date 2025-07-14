@@ -2,6 +2,8 @@
 
 A Chrome extension for debugging Salesforce Commerce Cloud (SFCC) checkout flows by monitoring network calls and correlating them with Salesforce debug logs.
 
+![Checkout Debugger Panel](/images/Checkout-Panel.png "Checkout Debugger Panel")
+
 ## Features
 
 ### 🔍 **Real-time Network Monitoring**
@@ -91,6 +93,8 @@ A Chrome extension for debugging Salesforce Commerce Cloud (SFCC) checkout flows
 
 ### Network Monitoring
 
+![Network Overview](/images/Network.png "Network Overview")
+
 The extension automatically monitors these checkout stages:
 - **Address**: Shipping and billing address updates
 - **Delivery Method**: Shipping method selection
@@ -100,6 +104,8 @@ The extension automatically monitors these checkout stages:
 - **Order Placement**: Final order submission
 
 ### Session Management
+
+![Session Overview](/images/Session.png "Sessions Overview")
 
 **Creating Sessions:**
 - Sessions are automatically created when a checkout ID is detected

@@ -623,33 +623,47 @@ vertical-align: baseline !important;
     </div>
     
     <div class="sfcc-panel-content" style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
-      <!-- Active Account Section -->
-      <div id="sfcc-active-account-section" class="sfcc-status-section" style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; background: #f0f9ff; display: none;">
-        <div class="sfcc-status-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <div class="sfcc-status-title" style="font-weight: 600; color: #1e40af; font-size: 12px;">Active Salesforce Account</div>
-          <div id="sfcc-account-type-badge" class="sfcc-status-badge" style="padding: 2px 6px; border-radius: 12px; font-size: 9px; font-weight: 500; text-transform: uppercase; background: #dcfce7; color: #166534;">Production</div>
-        </div>
-        <div style="font-size: 11px; color: #1e40af;">
-          <div><strong>Name:</strong> <span id="sfcc-active-account-name">-</span></div>
-          <div><strong>Instance:</strong> <span id="sfcc-active-account-instance">-</span></div>
-          <div><strong>Last Sync:</strong> <span id="sfcc-active-account-sync">Never</span></div>
+      <!-- Active Account Section - Compact -->
+      <div id="sfcc-active-account-section" class="sfcc-status-section" style="padding: 8px 16px; border-bottom: 1px solid #e2e8f0; background: #f0f9ff; display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+              <div style="font-weight: 600; color: #1e40af; font-size: 11px;">SF Account</div>
+              <div id="sfcc-account-type-badge" class="sfcc-status-badge" style="padding: 1px 4px; border-radius: 8px; font-size: 8px; font-weight: 500; text-transform: uppercase; background: #dcfce7; color: #166534;">Production</div>
+            </div>
+            <div style="font-size: 10px; color: #1e40af; line-height: 1.2;">
+              <span id="sfcc-active-account-name">-</span> • <span id="sfcc-active-account-instance">-</span>
+            </div>
+          </div>
+          <div style="font-size: 9px; color: #6b7280; text-align: right;">
+            <div>Last Sync:</div>
+            <div id="sfcc-active-account-sync" style="font-weight: 500;">Never</div>
+          </div>
         </div>
       </div>
 
-      <!-- Current Session Section -->
-      <div id="sfcc-current-session-section" class="sfcc-status-section" style="padding: 12px 16px; border-bottom: 1px solid #e2e8f0; background: #f0fdf4; display: none;">
-        <div class="sfcc-status-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <div class="sfcc-status-title" style="font-weight: 600; color: #166534; font-size: 12px;">Current Session</div>
-          <div style="display: flex; gap: 4px;">
-            <button id="sfcc-save-session-btn" style="padding: 2px 6px; border: 1px solid #22c55e; border-radius: 3px; background: #22c55e; color: white; font-size: 9px; cursor: pointer;">Save</button>
-            <button id="sfcc-end-session-btn" style="padding: 2px 6px; border: 1px solid #ef4444; border-radius: 3px; background: #ef4444; color: white; font-size: 9px; cursor: pointer;">End</button>
+      <!-- Current Session Section - Compact -->
+      <div id="sfcc-current-session-section" class="sfcc-status-section" style="padding: 8px 16px; border-bottom: 1px solid #e2e8f0; background: #f0fdf4; display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+              <div style="font-weight: 600; color: #166534; font-size: 11px;">Current Session</div>
+              <div style="display: flex; gap: 3px;">
+                <button id="sfcc-save-session-btn" style="padding: 1px 4px; border: 1px solid #22c55e; border-radius: 2px; background: #22c55e; color: white; font-size: 8px; cursor: pointer;">Save</button>
+                <button id="sfcc-end-session-btn" style="padding: 1px 4px; border: 1px solid #ef4444; border-radius: 2px; background: #ef4444; color: white; font-size: 8px; cursor: pointer;">End</button>
+              </div>
+            </div>
+            <div style="font-size: 10px; color: #166534; line-height: 1.2;">
+              <div style="display: flex; gap: 8px;">
+                <span><span id="sfcc-current-session-name">-</span></span>
+                <span><span id="sfcc-current-session-calls">0</span> calls</span>
+                <span><span id="sfcc-current-session-duration">-</span></span>
+              </div>
+              <div style="margin-top: 1px;">
+                ID: <span id="sfcc-current-session-checkout-id" style="font-family: monospace; font-size: 9px;">-</span>
+              </div>
+            </div>
           </div>
-        </div>
-        <div style="font-size: 11px; color: #166534;">
-          <div><strong>Name:</strong> <span id="sfcc-current-session-name">-</span></div>
-          <div><strong>Checkout ID:</strong> <span id="sfcc-current-session-checkout-id">-</span></div>
-          <div><strong>Duration:</strong> <span id="sfcc-current-session-duration">-</span></div>
-          <div><strong>Calls:</strong> <span id="sfcc-current-session-calls">0</span></div>
         </div>
       </div>
 
@@ -1281,8 +1295,8 @@ vertical-align: baseline !important;
 
         return `
       <div class="sfcc-network-call" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
-        <div class="sfcc-network-call-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; min-height: 40px;">
-          <div style="display: flex; align-items: center; flex: 1; min-height: 24px;">
+        <div class="sfcc-network-call-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
+          <div style="display: flex; align-items: center; flex: 1;">
             <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getMethodColor(call.method)};">${call.method}</span>
             <span style="font-family: monospace; font-size: 10px; color: #374151; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${call.urlName || this.truncateUrl(call.url)}</span>
             <span style="background: #dbeafe; color: #1d4ed8; padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: 500; text-transform: uppercase; margin-left: 4px;">${stageLabel}</span>
@@ -1328,8 +1342,9 @@ vertical-align: baseline !important;
               <div style="font-family: monospace; font-size: 9px; background: #f0fdf4; padding: 6px; border-radius: 3px; border: 1px solid #bbf7d0; white-space: pre-wrap; max-height: 120px; overflow: auto;">
                 ${(() => {
                   const responseData = call.responseBody || call.response
-                  const responseStr = typeof responseData === "string" ? responseData : JSON.stringify(responseData, null, 2)
-  return responseStr || "No response data"
+                  const responseStr =
+                    typeof responseData === "string" ? responseData : JSON.stringify(responseData, null, 2)
+                  return responseStr || "No response data"
                 })()}
               </div>
             </div>
@@ -1558,7 +1573,7 @@ vertical-align: baseline !important;
             <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: #8b5cf6;">CORR</span>
             <span style="font-size: 11px; color: #374151; flex: 1;">${correlation.type}</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px; min-height: 24px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 10px; color: #6b7280;">${new Date(correlation.timestamp).toLocaleTimeString()}</span>
             <div style="font-size: 11px; font-weight: 600; color: #8b5cf6;">
               ${(correlation.confidence * 100).toFixed(0)}%
@@ -1603,12 +1618,12 @@ vertical-align: baseline !important;
 
         return `
       <div class="sfcc-log" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden;">
-        <div class="sfcc-log-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s; min-height: 40px;">
-          <div style="display: flex; align-items: center; flex: 1; min-height: 24px;">
+        <div class="sfcc-log-header" style="padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.2s;">
+          <div style="display: flex; align-items: center; flex: 1;">
             <span style="font-weight: 600; font-size: 10px; padding: 2px 6px; border-radius: 3px; color: white; margin-right: 8px; background: ${this.getLogLevelColor(logLevel)};">${logLevel}</span>
             <span style="font-size: 11px; color: #374151; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${logMessage}</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px; min-height: 24px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-size: 10px; color: #6b7280;">${logTime ? new Date(logTime).toLocaleTimeString() : "Unknown time"}</span>
           </div>
         </div>
