@@ -2,7 +2,7 @@
 
 A Chrome extension for debugging Salesforce Commerce Cloud (SFCC) checkout flows by monitoring network calls and correlating them with Salesforce debug logs.
 
-![Checkout Debugger Panel](/images/Checkout-Panel.png "Checkout Debugger Panel")
+![Checkout Debugger Panel](/assets/Checkout-Panel.png "Checkout Debugger Panel")
 
 ## Features
 
@@ -38,15 +38,9 @@ A Chrome extension for debugging Salesforce Commerce Cloud (SFCC) checkout flows
 
 ## Installation
 
-### From Chrome Web Store
-*Coming soon - extension is currently in development*
-
 ### Manual Installation (Development)
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/shane-saltbox/checkout-extension.git
-   cd sfcc-checkout-debugger
-   ```
+![Installing Checkout Debugger](/assets/Installing-Checkout-Debugger.mov "Installing Checkout Debugger")
+1. Download the repo from the browser - https://github.com/Saltbox-Mgmt/checkout-extension
 
 2. Open Chrome and navigate to `chrome://extensions/`
 
@@ -93,7 +87,7 @@ A Chrome extension for debugging Salesforce Commerce Cloud (SFCC) checkout flows
 
 ### Network Monitoring
 
-![Network Overview](/images/Network.png "Network Overview")
+![Network Overview](/assets/Network.png "Network Overview")
 
 The extension automatically monitors these checkout stages:
 - **Address**: Shipping and billing address updates
@@ -105,7 +99,7 @@ The extension automatically monitors these checkout stages:
 
 ### Session Management
 
-![Session Overview](/images/Session.png "Sessions Overview")
+![Session Overview](/assets/Session.png "Sessions Overview")
 
 **Creating Sessions:**
 - Sessions are automatically created when a checkout ID is detected
@@ -241,7 +235,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 For issues, questions, or contributions:
-- **GitHub Issues**: [Report bugs or request features](https://github.com/your-repo/sfcc-checkout-debugger/issues)
+- **GitHub Issues**: [Report bugs or request features](https://github.com/Saltbox-Mgmt/checkout-extension/issues)
 - **Documentation**: Check this README and inline code comments
 - **Salesforce Trailblazer Community**: Search for Commerce Cloud debugging topics
 
