@@ -39,7 +39,8 @@ A Chrome extension for debugging Salesforce Commerce Cloud (SFCC) checkout flows
 ## Installation
 
 ### Manual Installation (Development)
-![Installing Checkout Debugger](/assets/Installing-Checkout-Debugger.mov "Installing Checkout Debugger")
+Watch the installation steps here - https://vimeo.com/1101542950?share=copy (password: saltbox)
+
 1. Download the repo from the browser - https://github.com/Saltbox-Mgmt/checkout-extension
 
 2. Open Chrome and navigate to `chrome://extensions/`
